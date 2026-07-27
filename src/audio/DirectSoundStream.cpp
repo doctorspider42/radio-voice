@@ -184,6 +184,16 @@ void DirectSoundInputStream::threadBody()
 
     std::vector<u8> raw(static_cast<size_t>(ringBytes));
 
+    // A capture buffer that starts without complaining and then produces
+    // nothing is indistinguishable, from the engine's side, from one that is
+    // merely slow - both look like a ring that will not fill. These two count
+    // enough to tell them apart in the log without any per-poll noise.
+    u64  framesDelivered = 0;
+    bool reportedFirst   = false;
+    bool reportedSilent  = false;
+    int  pollsSinceStart = 0;
+    const int pollsForVerdict = static_cast<int>(2000 / std::max<DWORD>(1, interval));
+
     while (running_.load(std::memory_order_acquire)) {
         if (::WaitForSingleObject(stopEvent_, interval) == WAIT_OBJECT_0)
             break;
@@ -191,6 +201,24 @@ void DirectSoundInputStream::threadBody()
         DWORD capturePos = 0, readPos = 0;
         if (FAILED(buffer_->GetCurrentPosition(&capturePos, &readPos)))
             continue;
+
+        // Reported once, either way, roughly two seconds in. Whether the
+        // driver's own cursors moved is the whole question: cursors that
+        // advanced while nothing reached the ring is a bug on this side, and
+        // cursors frozen at zero is a device that accepted Start and then did
+        // nothing - which no amount of code here can fix.
+        ++pollsSinceStart;
+        if (!reportedFirst && !reportedSilent && pollsSinceStart >= pollsForVerdict) {
+            reportedSilent = true;
+            RV_WARN("DirectSound capture has delivered nothing after 2 s "
+                    "(capture cursor %lu, read cursor %lu, ours %lu, of %lu bytes). "
+                    "Cursors still at zero mean the device accepted Start and is "
+                    "not running; try the WASAPI backend for this device.",
+                    static_cast<unsigned long>(capturePos),
+                    static_cast<unsigned long>(readPos),
+                    static_cast<unsigned long>(readCursor_),
+                    static_cast<unsigned long>(ringBytes));
+        }
 
         // Everything between our cursor and the driver's read cursor is valid,
         // fully-written data.
@@ -233,7 +261,18 @@ void DirectSoundInputStream::threadBody()
             xruns_.fetch_add(1, std::memory_order_relaxed);
 
         readCursor_ = (readCursor_ + totalBytes) % ringBytes;
+
+        framesDelivered += static_cast<u64>(frames);
+        if (!reportedFirst && framesDelivered > 0) {
+            reportedFirst = true;
+            RV_INFO("DirectSound capture delivering: first %llu frames after %d poll(s)",
+                    static_cast<unsigned long long>(framesDelivered), pollsSinceStart);
+        }
     }
+
+    RV_INFO("DirectSound capture stopped after %llu frames, %u xrun(s)",
+            static_cast<unsigned long long>(framesDelivered),
+            xruns_.load(std::memory_order_relaxed));
 
     buffer_->Stop();
     running_.store(false, std::memory_order_release);
