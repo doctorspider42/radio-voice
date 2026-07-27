@@ -65,6 +65,38 @@ void DirectSoundStreamBase::launchThread()
     });
 }
 
+HANDLE DirectSoundStreamBase::createPollTimer(DWORD intervalMs) const
+{
+    HANDLE timer = ::CreateWaitableTimerExW(nullptr, nullptr,
+                                            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                            TIMER_ALL_ACCESS);
+    if (!timer) {
+        RV_WARN("high-resolution timer unavailable; DirectSound will poll at the "
+                "system tick rate (about 15 ms) instead of every %lu ms",
+                static_cast<unsigned long>(intervalMs));
+        return nullptr;
+    }
+
+    // Negative is relative, in 100 ns units; the period repeats it.
+    LARGE_INTEGER due{};
+    due.QuadPart = -static_cast<LONGLONG>(intervalMs) * 10000LL;
+    if (!::SetWaitableTimer(timer, &due, static_cast<LONG>(intervalMs), nullptr, nullptr, FALSE)) {
+        ::CloseHandle(timer);
+        return nullptr;
+    }
+
+    return timer;
+}
+
+bool DirectSoundStreamBase::waitForPoll(HANDLE timer, DWORD intervalMs) const
+{
+    if (!timer)
+        return ::WaitForSingleObject(stopEvent_, intervalMs) != WAIT_OBJECT_0;
+
+    HANDLE waitOn[2] = {stopEvent_, timer};
+    return ::WaitForMultipleObjects(2, waitOn, FALSE, INFINITE) != WAIT_OBJECT_0;
+}
+
 bool DirectSoundStreamBase::parseDeviceGuid(const DeviceId& id, GUID& out) const
 {
     // An empty id means "the default device", which DirectSound expresses as a
@@ -194,8 +226,19 @@ void DirectSoundInputStream::threadBody()
     int  pollsSinceStart = 0;
     const int pollsForVerdict = static_cast<int>(2000 / std::max<DWORD>(1, interval));
 
+    // How the polls divide up. A backend that under-delivers is either being
+    // asked too rarely or is finding nothing when it asks, and the ratio of
+    // these two says which - the fixes have nothing in common.
+    u64   idlePolls    = 0;
+    u64   lockFailures = 0;
+    DWORD maxAvailable = 0;
+    DWORD lastCapture  = 0;
+    DWORD lastRead     = 0;
+
+    HANDLE pollTimer = createPollTimer(interval);
+
     while (running_.load(std::memory_order_acquire)) {
-        if (::WaitForSingleObject(stopEvent_, interval) == WAIT_OBJECT_0)
+        if (!waitForPoll(pollTimer, interval))
             break;
 
         DWORD capturePos = 0, readPos = 0;
@@ -222,9 +265,16 @@ void DirectSoundInputStream::threadBody()
 
         // Everything between our cursor and the driver's read cursor is valid,
         // fully-written data.
+        lastCapture = capturePos;
+        lastRead    = readPos;
+
         DWORD available = (readPos + ringBytes - readCursor_) % ringBytes;
-        if (available == 0)
+        if (available > maxAvailable)
+            maxAvailable = available;
+        if (available == 0) {
+            ++idlePolls;
             continue;
+        }
 
         // Falling more than a ring behind means the driver lapped us.
         if (available > ringBytes - static_cast<DWORD>(frameBytes_)) {
@@ -238,6 +288,7 @@ void DirectSoundInputStream::threadBody()
 
         hr = buffer_->Lock(readCursor_, available, &ptr1, &bytes1, &ptr2, &bytes2, 0);
         if (FAILED(hr)) {
+            ++lockFailures;
             xruns_.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
@@ -270,9 +321,18 @@ void DirectSoundInputStream::threadBody()
         }
     }
 
-    RV_INFO("DirectSound capture stopped after %llu frames, %u xrun(s)",
-            static_cast<unsigned long long>(framesDelivered),
-            xruns_.load(std::memory_order_relaxed));
+    if (pollTimer)
+        ::CloseHandle(pollTimer);
+
+    RV_INFO("DirectSound capture stopped: %llu frames, %d polls (%llu idle, %llu lock "
+            "failures), largest read %lu of %lu bytes, final cursors capture %lu / read %lu",
+            static_cast<unsigned long long>(framesDelivered), pollsSinceStart,
+            static_cast<unsigned long long>(idlePolls),
+            static_cast<unsigned long long>(lockFailures),
+            static_cast<unsigned long>(maxAvailable),
+            static_cast<unsigned long>(ringBytes),
+            static_cast<unsigned long>(lastCapture),
+            static_cast<unsigned long>(lastRead));
 
     buffer_->Stop();
     running_.store(false, std::memory_order_release);
@@ -390,8 +450,10 @@ void DirectSoundOutputStream::threadBody()
         return;
     }
 
+    HANDLE pollTimer = createPollTimer(interval);
+
     while (running_.load(std::memory_order_acquire)) {
-        if (::WaitForSingleObject(stopEvent_, interval) == WAIT_OBJECT_0)
+        if (!waitForPoll(pollTimer, interval))
             break;
 
         DWORD playPos = 0, safeWritePos = 0;
@@ -447,6 +509,9 @@ void DirectSoundOutputStream::threadBody()
 
         writeCursor_ = (writeCursor_ + bytes1 + bytes2) % ringBytes;
     }
+
+    if (pollTimer)
+        ::CloseHandle(pollTimer);
 
     buffer_->Stop();
     running_.store(false, std::memory_order_release);

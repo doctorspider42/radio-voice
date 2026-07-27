@@ -54,6 +54,23 @@ protected:
 
     virtual void threadBody() = 0;
 
+    /// A periodic timer for the poll loop, and the wait that goes with it.
+    ///
+    /// These exist because a plain timeout does not do what the interval says.
+    /// The system timer runs at about 15.6 ms by default, and
+    /// WaitForSingleObject rounds up to it - so asking for 2 ms and getting
+    /// 15.6 is not an overload symptom, it is the ordinary case, and it holds
+    /// however short the requested period is.
+    ///
+    /// The alternative fix, timeBeginPeriod, raises the tick rate for the whole
+    /// machine to repair one thread. A high-resolution waitable timer is local
+    /// to this stream. It needs Windows 10 1803, so createPollTimer falls back
+    /// to a plain timeout when the flag is refused - slow polling being better
+    /// than none.
+    HANDLE createPollTimer(DWORD intervalMs) const;
+    /// Returns false when the stream should stop.
+    bool   waitForPoll(HANDLE timer, DWORD intervalMs) const;
+
     WAVEFORMATEX makeWaveFormat(int channels, int sampleRate) const;
 
     SampleFormat sampleFormat_ = SampleFormat::Int16;
