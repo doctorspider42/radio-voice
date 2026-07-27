@@ -61,9 +61,19 @@ Write-Host "Adding the driver package to the driver store..."
 pnputil /add-driver $inf /install
 $pnputilResult = $LASTEXITCODE
 
-# 259 is ERROR_NO_MORE_ITEMS, which pnputil returns when the package is already
-# present and unchanged - not a failure.
-if ($pnputilResult -ne 0 -and $pnputilResult -ne 259) {
+# Two non-zero codes mean success here.
+#
+# 259 is ERROR_NO_MORE_ITEMS, returned when the package is already present and
+# unchanged.
+#
+# 3010 is ERROR_SUCCESS_REBOOT_REQUIRED. The package went into the store; what
+# it cannot do is unload the copy already running, so the swap finishes on the
+# next boot. Treating it as a failure sends the reader hunting for a problem
+# that is not there - and worse, it is exactly the code a *re-install* over a
+# live driver produces, which is the common case while developing one.
+$script:rebootRequired = ($pnputilResult -eq 3010)
+
+if ($pnputilResult -ne 0 -and $pnputilResult -ne 259 -and $pnputilResult -ne 3010) {
     # The SPAPI codes are reported as signed integers and mean nothing on
     # sight, so the ones that actually happen here get named.
     $explanation = switch ($pnputilResult) {
@@ -117,7 +127,11 @@ if ($existing) {
     & $devcon install $inf 'root\RadioVoiceAudio'
 }
 
-if ($LASTEXITCODE -ne 0) {
+# devcon returns 1 to say the work succeeded but needs a reboot, which is the
+# ordinary outcome when the driver being replaced is currently loaded.
+if ($LASTEXITCODE -eq 1) {
+    $script:rebootRequired = $true
+} elseif ($LASTEXITCODE -ne 0) {
     throw @"
 devcon failed with exit code $LASTEXITCODE.
 
@@ -132,5 +146,23 @@ Write-Host ""
 Write-Host "Installed. Expected endpoints:" -ForegroundColor Green
 Write-Host "  Playback  : RadioVoice Output"
 Write-Host "  Recording : RadioVoice Microphone"
+
+if ($script:rebootRequired) {
+    Write-Host ""
+    Write-Host "A reboot is required to finish." -ForegroundColor Yellow
+    Write-Host @"
+  The new package is in the driver store, but the previous build is still
+  loaded and Windows will not unload it while the device exists. Until the
+  machine restarts, the endpoints are being served by the OLD binary - so
+  testing now measures the previous build, not this one.
+
+  To skip the reboot next time, remove the device first so nothing is holding
+  the driver, then install into the gap:
+
+      uninstall-driver.cmd
+      install-driver.cmd
+"@
+}
+
 Write-Host ""
 Write-Host "Verify with:  Get-PnpDevice -FriendlyName '*RadioVoice*'"
