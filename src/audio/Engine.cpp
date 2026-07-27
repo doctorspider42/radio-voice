@@ -345,6 +345,7 @@ void Engine::allocateBuffers(double outputSampleRate)
     drift_.reset(nominalRatio_);
 
     cpuLoadSmoothed_ = 0.0;
+    primed_          = false;
     starvedBlocks_   = 0;
     starvedBlocksToFlag_ =
         std::max(1, static_cast<int>(outputSampleRate / std::max(1, maxBlockFrames_)));
@@ -403,6 +404,24 @@ void Engine::produce(float* interleaved, int channels, int frames)
 
 void Engine::processChunk(float* dst, int dstChannels, int frames)
 {
+    // ---- priming ---------------------------------------------------------
+    // The render device starts asking for audio before the capture device has
+    // delivered any. Processing that would mean running the whole chain, and
+    // the resampler, against an empty buffer for as long as it takes the input
+    // to arrive. Silence until there is something real to work with costs a few
+    // tens of milliseconds at start-up that nobody hears.
+    if (!primed_) {
+        if (inputRing_.filled() < targetRingFill_) {
+            std::memset(dst, 0, static_cast<size_t>(frames) * dstChannels * sizeof(float));
+            return;
+        }
+
+        // Start from a clean slate now that the buffer is at its working level.
+        primed_ = true;
+        resampler_.reset();
+        drift_.reset(nominalRatio_);
+    }
+
     // ---- clock bridge ----------------------------------------------------
     // A backlog far beyond target means a device stalled and then caught up in
     // one burst. Draining it gradually would leave latency permanently high, so

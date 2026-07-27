@@ -156,6 +156,10 @@ private:
     double counterFrequency_ = 1.0;
     double cpuLoadSmoothed_  = 0.0;
 
+    /// False until the capture ring has first reached its working level. See
+    /// the priming block at the top of processChunk.
+    bool primed_ = false;
+
     /// Consecutive blocks that could not be fed from the capture ring, and the
     /// threshold at which that is reported as a dead input (about one second).
     int starvedBlocks_       = 0;

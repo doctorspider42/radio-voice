@@ -542,11 +542,14 @@ void App::renderTopBar()
 
     // Right-aligned controls.
     {
-        const float buttonWidth = 96.0f;
-        const float logWidth    = 70.0f;
+        const float buttonWidth  = 84.0f;
+        const float restartWidth = 84.0f;
+        const float logWidth     = 62.0f;
+        const float spacing      = ImGui::GetStyle().ItemSpacing.x;
+
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
-                             buttonWidth - logWidth - ImGui::GetStyle().ItemSpacing.x);
+                             buttonWidth - restartWidth - logWidth - spacing * 2);
 
         if (ImGui::Button(running ? "Stop" : "Start", ImVec2(buttonWidth, 0))) {
             if (running)
@@ -554,6 +557,16 @@ void App::renderTopBar()
             else
                 startEngine();
         }
+
+        // Always present, not only when a setting changed. Restarting the
+        // stream is the first thing to try for anything that sounds wrong, and
+        // hiding it behind a condition means it is missing exactly when it is
+        // wanted.
+        ImGui::SameLine();
+        if (ImGui::Button("Restart", ImVec2(restartWidth, 0)))
+            restartEngine();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Stops and reopens both audio devices.");
 
         ImGui::SameLine();
         const int problems = log::problemCount();
@@ -591,11 +604,8 @@ void App::renderTopBar()
 
     if (running && deviceSelectionDiffers()) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-        ImGui::TextUnformatted("Device settings changed.");
+        ImGui::TextUnformatted("Device settings changed - press Restart to apply them.");
         ImGui::PopStyleColor();
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Restart audio"))
-            restartEngine();
     }
 
     ImGui::Separator();
@@ -1074,20 +1084,31 @@ void App::renderGatePanel()
     ImGui::PushFont(fonts_.medium, 0.0f);
     ImGui::TextUnformatted("Noise Gate");
     ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
 
+    // The state badge and the switch share the right-hand end of the header, so
+    // the space for both is reserved up front. Positioning the badge by a fixed
+    // offset back from the switch made them overlap as soon as the text changed
+    // width.
+    const bool  open      = meters_.gateOpen.load();
+    const char* stateText = open ? "OPEN" : "SHUT";
+
+    constexpr float kSwitchWidth = 34.0f;
+    const float pillWidth = ImGui::CalcTextSize(stateText).x + 20.0f; // statusPill padding
+    const float spacing   = ImGui::GetStyle().ItemSpacing.x;
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
+                         pillWidth - kSwitchWidth - spacing);
+
+    statusPill(stateText, open ? theme::kSignal : theme::kTextFaint);
+
+    ImGui::SameLine();
     bool enabled = params_.gateEnabled.load();
     if (toggleSwitch("gateEnable", &enabled)) {
         params_.gateEnabled.store(enabled);
         params_.touch();
         markDirty();
     }
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 60);
-    statusPill(meters_.gateOpen.load() ? "OPEN" : "SHUT",
-               meters_.gateOpen.load() ? theme::kSignal : theme::kTextFaint);
 
     ImGui::Spacing();
 

@@ -110,6 +110,22 @@ public:
 
         phase_ -= keepFrom;
 
+        // Starvation must not leave the read position running away.
+        //
+        // With too little input, keepFrom hits its upper clamp and cannot
+        // absorb the whole advance, so phase_ keeps part of it. Called
+        // repeatedly against an empty buffer - which is exactly what happens
+        // while a stream is starting and nothing has arrived yet - the leftover
+        // accumulates without bound. Every interpolation index then clamps to
+        // the last available sample, so the output becomes long runs of one
+        // held value, and it takes as many blocks to unwind as it took to build
+        // up. Snapping back costs one fractional phase; not doing so costs
+        // seconds of gross distortion.
+        if (phase_ >= 2.0) {
+            phase_ = 1.0;
+            underrun = true;
+        }
+
         // Everything below the retained window has been fully consumed.
         return std::clamp(keepFrom, 0, inFrames);
     }
