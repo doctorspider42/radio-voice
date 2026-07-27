@@ -35,7 +35,21 @@ void RecordStatus(_In_ PCWSTR name, _In_ NTSTATUS status);
 
 /// Bumps a named counter. Counter storage is a small fixed table, so there is
 /// no allocation on any path this touches.
+///
+/// Safe to call above PASSIVE_LEVEL: the in-memory counter is always updated,
+/// and the registry write is skipped when the IRQL forbids it. Anything counted
+/// from a DPC therefore only becomes visible once something calls Flush.
 void Count(_In_ PCWSTR name);
+
+/// Adds to a named counter. Same IRQL rules as Count - this exists for the
+/// streaming path, where the interesting quantity is how many bytes moved
+/// rather than how many times a function ran.
+void Add(_In_ PCWSTR name, _In_ ULONG amount);
+
+/// Writes every counter out. Must be called at PASSIVE_LEVEL. This is what
+/// makes the DISPATCH_LEVEL counters readable; the streaming path calls it on
+/// each state change, so the numbers settle as soon as a stream stops.
+void Flush();
 
 } // namespace rvdiag
 

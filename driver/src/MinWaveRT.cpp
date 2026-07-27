@@ -194,6 +194,9 @@ MiniportWaveRTStream::~MiniportWaveRTStream()
         m_miniport = nullptr;
     }
 
+    rvdiag::Count(m_capture ? L"CaptureStreamDestroyed" : L"RenderStreamDestroyed");
+    rvdiag::Flush();
+
     RV_LOG("stream destroyed");
 }
 
@@ -222,30 +225,66 @@ BOOLEAN MiniportWaveRTStream::ParseFormat(PKSDATAFORMAT format)
 {
     PAGED_CODE();
 
-    if (!format || format->FormatSize < sizeof(KSDATAFORMAT_WAVEFORMATEX))
+    if (!format) {
+        rvdiag::Count(L"FormatRejectedNull");
         return FALSE;
+    }
+
+    // The size to require is the sum of the two structures, NOT
+    // sizeof(KSDATAFORMAT_WAVEFORMATEX). That type carries tail padding to
+    // align the whole thing, so it measures 84 bytes while the format the OS
+    // actually hands over is 64 + 18 = 82. Comparing against the padded size
+    // rejects every plain PCM format - which is exactly the one the audio
+    // engine picks for an ordinary stereo endpoint. The stream is then refused,
+    // the engine never opens the pin, and the client sits waiting on a buffer
+    // event that will never be signalled.
+    if (format->FormatSize < sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEX)) {
+        rvdiag::Record(L"FormatRejectedSize", format->FormatSize);
+        return FALSE;
+    }
+
+    if (!IsEqualGUIDAligned(format->MajorFormat, KSDATAFORMAT_TYPE_AUDIO) ||
+        !IsEqualGUIDAligned(format->Specifier, KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)) {
+        rvdiag::Count(L"FormatRejectedSpecifier");
+        return FALSE;
+    }
 
     const auto* wave = &reinterpret_cast<PKSDATAFORMAT_WAVEFORMATEX>(format)->WaveFormatEx;
 
-    if (wave->nChannels != RV_CHANNELS || wave->nSamplesPerSec != RV_SAMPLE_RATE)
+    if (wave->nChannels != RV_CHANNELS || wave->nSamplesPerSec != RV_SAMPLE_RATE) {
+        rvdiag::Record(L"FormatRejectedChannels", wave->nChannels);
+        rvdiag::Record(L"FormatRejectedRate", wave->nSamplesPerSec);
         return FALSE;
+    }
 
     // Clients use either the plain tag or the extensible wrapper, and the two
     // describe the same bytes; only the subtype tells them apart.
     if (wave->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wave);
-        if (!IsEqualGUIDAligned(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_PCM))
+        if (format->FormatSize < sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEXTENSIBLE)) {
+            rvdiag::Record(L"FormatRejectedExtSize", format->FormatSize);
             return FALSE;
+        }
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wave);
+        if (!IsEqualGUIDAligned(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
+            rvdiag::Count(L"FormatRejectedSubtype");
+            return FALSE;
+        }
     } else if (wave->wFormatTag != WAVE_FORMAT_PCM) {
+        rvdiag::Record(L"FormatRejectedTag", wave->wFormatTag);
         return FALSE;
     }
 
-    if (wave->wBitsPerSample != 16 && wave->wBitsPerSample != 24)
+    if (wave->wBitsPerSample != 16 && wave->wBitsPerSample != 24) {
+        rvdiag::Record(L"FormatRejectedBits", wave->wBitsPerSample);
         return FALSE;
+    }
 
     m_wireBytesPerSample = wave->wBitsPerSample / 8u;
     m_wireFrameBytes     = m_wireBytesPerSample * RV_CHANNELS;
     m_wireBytesPerSecond = m_wireFrameBytes * RV_SAMPLE_RATE;
+
+    rvdiag::Record(m_capture ? L"CaptureFormatBits" : L"RenderFormatBits",
+                   wave->wBitsPerSample);
 
     return TRUE;
 }
@@ -260,6 +299,12 @@ BOOLEAN MiniportWaveRTStream::ParseFormat(PKSDATAFORMAT format)
 // Left-aligning into 32 bits rather than scaling means the round trip through
 // the ring is exact for every advertised width.
 //-----------------------------------------------------------------------------
+
+// Non-paged: both of these run inside the timer callback, at DISPATCH_LEVEL,
+// where touching a paged-out code page is a bugcheck rather than a fault that
+// gets resolved. They land in a pageable section by default because the file
+// opens one for the miniport methods around them.
+#pragma code_seg()
 
 namespace {
 
@@ -306,6 +351,8 @@ void InternalToWire(const LONG* source, void* destination, ULONG bytesPerSample,
 
 } // namespace
 
+#pragma code_seg("PAGE")
+
 NTSTATUS MiniportWaveRTStream::Init(MiniportWaveRT* miniport,
                                     PPORTWAVERTSTREAM portStream,
                                     ULONG pin, BOOLEAN capture,
@@ -313,15 +360,19 @@ NTSTATUS MiniportWaveRTStream::Init(MiniportWaveRT* miniport,
 {
     PAGED_CODE();
 
+    // Direction first: ParseFormat records which side negotiated what, and
+    // reads m_capture to do it.
+    m_capture = capture;
+
     if (!ParseFormat(dataFormat)) {
         RV_LOG("stream refused: unsupported format");
+        rvdiag::Count(capture ? L"CaptureStreamRefused" : L"RenderStreamRefused");
         return STATUS_NOT_SUPPORTED;
     }
 
     m_miniport   = miniport;
     m_portStream = portStream;
     m_pin        = pin;
-    m_capture    = capture;
     m_state      = KSSTATE_STOP;
 
     miniport->StreamCreated(this);
@@ -409,6 +460,12 @@ NTSTATUS MiniportWaveRTStream::AllocateBuffer(ULONG requestedSize,
     *actualSize          = size;
     *offsetFromFirstPage = 0;
     *cacheType           = MmCached;
+
+    rvdiag::Record(m_capture ? L"CaptureBufferBytes" : L"RenderBufferBytes", size);
+    rvdiag::Record(m_capture ? L"CaptureNotifyCount" : L"RenderNotifyCount",
+                   notificationCount);
+    rvdiag::Record(m_capture ? L"CapturePeriod100ns" : L"RenderPeriod100ns",
+                   static_cast<ULONG>(m_period100ns));
 
     RV_LOG("buffer allocated: %lu bytes, %lu notifications, period %lld00ns",
            size, notificationCount, m_period100ns);
@@ -498,6 +555,8 @@ MiniportWaveRTStream::RegisterNotificationEvent(_In_ PKEVENT NotificationEvent)
     }
 
     KeReleaseInStackQueuedSpinLock(&handle);
+
+    rvdiag::Count(m_capture ? L"CaptureEventRegistered" : L"RenderEventRegistered");
     return status;
 }
 
@@ -523,17 +582,27 @@ MiniportWaveRTStream::UnregisterNotificationEvent(_In_ PKEVENT NotificationEvent
     return status;
 }
 
+// Non-paged for the same reason as the conversion helpers: the timer callback
+// is its only caller.
+#pragma code_seg()
+
 void MiniportWaveRTStream::SignalNotifications()
 {
     KLOCK_QUEUE_HANDLE handle;
     KeAcquireInStackQueuedSpinLock(&m_notificationLock, &handle);
 
+    ULONG signalled = 0;
     for (ULONG i = 0; i < m_notificationEventCount; ++i) {
-        if (m_notificationEvents[i])
+        if (m_notificationEvents[i]) {
             KeSetEvent(m_notificationEvents[i], 0, FALSE);
+            ++signalled;
+        }
     }
 
     KeReleaseInStackQueuedSpinLock(&handle);
+
+    if (signalled)
+        rvdiag::Count(m_capture ? L"CaptureNotified" : L"RenderNotified");
 }
 
 //-----------------------------------------------------------------------------
@@ -551,11 +620,15 @@ void MiniportWaveRTStream::TimerCallback(PEX_TIMER /*Timer*/, PVOID Context)
 
 void MiniportWaveRTStream::OnTick()
 {
+    const BOOLEAN capture = m_capture;
+    rvdiag::Count(capture ? L"CaptureTicks" : L"RenderTicks");
+
     KLOCK_QUEUE_HANDLE handle;
     KeAcquireInStackQueuedSpinLock(&m_stateLock, &handle);
 
     if (m_state != KSSTATE_RUN || !m_buffer || m_bufferSize == 0) {
         KeReleaseInStackQueuedSpinLock(&handle);
+        rvdiag::Count(capture ? L"CaptureTicksIdle" : L"RenderTicksIdle");
         return;
     }
 
@@ -603,8 +676,10 @@ void MiniportWaveRTStream::OnTick()
         const ULONG internalBytes = frames * RV_INTERNAL_FRAME_SIZE;
         auto*       scratch       = static_cast<LONG*>(m_scratch);
 
-        if (internalBytes > m_scratchSize)
+        if (internalBytes > m_scratchSize) {
+            rvdiag::Count(capture ? L"CaptureScratchShort" : L"RenderScratchShort");
             break;
+        }
 
         if (m_capture) {
             // cable -> client
@@ -619,11 +694,20 @@ void MiniportWaveRTStream::OnTick()
         offset = (offset + chunk) % m_bufferSize;
         remaining -= chunk;
         m_position += chunk;
+
+        rvdiag::Add(capture ? L"CaptureFramesMoved" : L"RenderFramesMoved", frames);
     }
 
-    // m_position was advanced by whatever was actually converted above, which
-    // is target rounded down to a frame boundary; the remainder carries into
-    // the next tick rather than being dropped.
+    // Resynchronise to the clock. In the ordinary case this changes nothing -
+    // the loop above already advanced the position by exactly this much. It
+    // matters when the tick was so late that delta was clamped to one buffer:
+    // without this the position would stay behind real time for as long as the
+    // stream runs, and every later tick would keep converting a whole buffer to
+    // chase a target it can never reach.
+    //
+    // Rounded down to a frame, so the sub-frame remainder carries into the next
+    // tick rather than being dropped.
+    m_position      = target - (target % m_wireFrameBytes);
     m_lastTime100ns = now;
 
     KeReleaseInStackQueuedSpinLock(&handle);
@@ -682,6 +766,21 @@ MiniportWaveRTStream::SetState(_In_ KSSTATE State)
     RV_LOG("SetState %d (%s)", State, m_capture ? "capture" : "render");
 
     switch (State) {
+        case KSSTATE_RUN:
+            rvdiag::Count(m_capture ? L"CaptureRun" : L"RenderRun");
+            break;
+        case KSSTATE_PAUSE:
+            rvdiag::Count(m_capture ? L"CapturePause" : L"RenderPause");
+            break;
+        case KSSTATE_ACQUIRE:
+            rvdiag::Count(m_capture ? L"CaptureAcquire" : L"RenderAcquire");
+            break;
+        case KSSTATE_STOP:
+            rvdiag::Count(m_capture ? L"CaptureStop" : L"RenderStop");
+            break;
+    }
+
+    switch (State) {
         case KSSTATE_STOP: {
             StopTimer();
 
@@ -736,6 +835,11 @@ MiniportWaveRTStream::SetState(_In_ KSSTATE State)
             return STATUS_INVALID_PARAMETER;
     }
 
+    // Counters bumped from the timer callback cannot write themselves out - the
+    // IRQL there forbids it. A state change is the natural moment to publish
+    // them: it runs at PASSIVE_LEVEL and it brackets every period of streaming.
+    rvdiag::Flush();
+
     return STATUS_SUCCESS;
 }
 
@@ -758,6 +862,11 @@ MiniportWaveRTStream::GetPosition(_Out_ PKSAUDIO_POSITION Position)
 {
     if (!Position)
         return STATUS_INVALID_PARAMETER;
+
+    // Counted because it answers a question nothing else does: whether the OS
+    // is polling this stream at all. A stream it opened and then never asked
+    // the position of is a stream it is not running.
+    rvdiag::Count(m_capture ? L"CaptureGetPosition" : L"RenderGetPosition");
 
     KLOCK_QUEUE_HANDLE handle;
     KeAcquireInStackQueuedSpinLock(&m_stateLock, &handle);
