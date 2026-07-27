@@ -72,6 +72,21 @@ struct Config {
         float gateLookaheadMs   = 3.0f;
         float gateSidechainHpfHz = 120.0f;
 
+        bool  compEnabled        = true;
+        float compThresholdDb    = -18.0f;
+        float compRatio          = 3.0f;
+        float compKneeDb         = 6.0f;
+        float compAttackMs       = 8.0f;
+        float compReleaseMs      = 120.0f;
+        float compMakeupDb       = 0.0f;
+        bool  compAutoMakeup     = true;
+        float compLookaheadMs    = 2.0f;
+        float compSidechainHpfHz = 100.0f;
+        bool  compRmsDetection   = true;
+
+        int   inputMix   = 0;   ///< InputMix
+        bool  monoOutput = false;
+
         bool  limiterEnabled   = true;
         float limiterCeilingDb = -1.0f;
         float limiterReleaseMs = 80.0f;

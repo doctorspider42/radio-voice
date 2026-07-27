@@ -49,6 +49,7 @@ private:
     void renderVirtualCableHint();
     void renderProcessingPanel();
     void renderGatePanel();
+    void renderCompressorPanel();
     void renderLimiterPanel();
     void renderChainPanel();
     void renderTransportBar();

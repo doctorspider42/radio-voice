@@ -114,6 +114,21 @@ Config Config::load()
         v.gateLookaheadMs    = p.value("gateLookaheadMs", v.gateLookaheadMs);
         v.gateSidechainHpfHz = p.value("gateSidechainHpfHz", v.gateSidechainHpfHz);
 
+        v.compEnabled        = p.value("compEnabled", v.compEnabled);
+        v.compThresholdDb    = p.value("compThresholdDb", v.compThresholdDb);
+        v.compRatio          = p.value("compRatio", v.compRatio);
+        v.compKneeDb         = p.value("compKneeDb", v.compKneeDb);
+        v.compAttackMs       = p.value("compAttackMs", v.compAttackMs);
+        v.compReleaseMs      = p.value("compReleaseMs", v.compReleaseMs);
+        v.compMakeupDb       = p.value("compMakeupDb", v.compMakeupDb);
+        v.compAutoMakeup     = p.value("compAutoMakeup", v.compAutoMakeup);
+        v.compLookaheadMs    = p.value("compLookaheadMs", v.compLookaheadMs);
+        v.compSidechainHpfHz = p.value("compSidechainHpfHz", v.compSidechainHpfHz);
+        v.compRmsDetection   = p.value("compRmsDetection", v.compRmsDetection);
+
+        v.inputMix   = p.value("inputMix", v.inputMix);
+        v.monoOutput = p.value("monoOutput", v.monoOutput);
+
         v.limiterEnabled   = p.value("limiterEnabled", v.limiterEnabled);
         v.limiterCeilingDb = p.value("limiterCeilingDb", v.limiterCeilingDb);
         v.limiterReleaseMs = p.value("limiterReleaseMs", v.limiterReleaseMs);
@@ -168,6 +183,19 @@ void Config::save() const
     p["gateReleaseMs"]      = params.gateReleaseMs;
     p["gateLookaheadMs"]    = params.gateLookaheadMs;
     p["gateSidechainHpfHz"] = params.gateSidechainHpfHz;
+    p["compEnabled"]        = params.compEnabled;
+    p["compThresholdDb"]    = params.compThresholdDb;
+    p["compRatio"]          = params.compRatio;
+    p["compKneeDb"]         = params.compKneeDb;
+    p["compAttackMs"]       = params.compAttackMs;
+    p["compReleaseMs"]      = params.compReleaseMs;
+    p["compMakeupDb"]       = params.compMakeupDb;
+    p["compAutoMakeup"]     = params.compAutoMakeup;
+    p["compLookaheadMs"]    = params.compLookaheadMs;
+    p["compSidechainHpfHz"] = params.compSidechainHpfHz;
+    p["compRmsDetection"]   = params.compRmsDetection;
+    p["inputMix"]           = params.inputMix;
+    p["monoOutput"]         = params.monoOutput;
     p["limiterEnabled"]     = params.limiterEnabled;
     p["limiterCeilingDb"]   = params.limiterCeilingDb;
     p["limiterReleaseMs"]   = params.limiterReleaseMs;
@@ -220,6 +248,21 @@ void Config::applyTo(Params& target) const
     target.gateLookaheadMs.store(params.gateLookaheadMs);
     target.gateSidechainHpfHz.store(params.gateSidechainHpfHz);
 
+    target.compEnabled.store(params.compEnabled);
+    target.compThresholdDb.store(params.compThresholdDb);
+    target.compRatio.store(params.compRatio);
+    target.compKneeDb.store(params.compKneeDb);
+    target.compAttackMs.store(params.compAttackMs);
+    target.compReleaseMs.store(params.compReleaseMs);
+    target.compMakeupDb.store(params.compMakeupDb);
+    target.compAutoMakeup.store(params.compAutoMakeup);
+    target.compLookaheadMs.store(params.compLookaheadMs);
+    target.compSidechainHpfHz.store(params.compSidechainHpfHz);
+    target.compRmsDetection.store(params.compRmsDetection);
+
+    target.inputMix.store(params.inputMix);
+    target.monoOutput.store(params.monoOutput);
+
     target.limiterEnabled.store(params.limiterEnabled);
     target.limiterCeilingDb.store(params.limiterCeilingDb);
     target.limiterReleaseMs.store(params.limiterReleaseMs);
@@ -254,6 +297,21 @@ void Config::captureFrom(const Params& source)
     params.gateReleaseMs      = source.gateReleaseMs.load();
     params.gateLookaheadMs    = source.gateLookaheadMs.load();
     params.gateSidechainHpfHz = source.gateSidechainHpfHz.load();
+
+    params.compEnabled        = source.compEnabled.load();
+    params.compThresholdDb    = source.compThresholdDb.load();
+    params.compRatio          = source.compRatio.load();
+    params.compKneeDb         = source.compKneeDb.load();
+    params.compAttackMs       = source.compAttackMs.load();
+    params.compReleaseMs      = source.compReleaseMs.load();
+    params.compMakeupDb       = source.compMakeupDb.load();
+    params.compAutoMakeup     = source.compAutoMakeup.load();
+    params.compLookaheadMs    = source.compLookaheadMs.load();
+    params.compSidechainHpfHz = source.compSidechainHpfHz.load();
+    params.compRmsDetection   = source.compRmsDetection.load();
+
+    params.inputMix   = source.inputMix.load();
+    params.monoOutput = source.monoOutput.load();
 
     params.limiterEnabled   = source.limiterEnabled.load();
     params.limiterCeilingDb = source.limiterCeilingDb.load();

@@ -10,6 +10,7 @@ namespace rv::dsp {
 enum class NodeKind {
     Gate,
     Equalizer,
+    Compressor,
     Vst3Plugin,
 };
 

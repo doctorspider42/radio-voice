@@ -48,8 +48,22 @@ enum class WasapiMode : int {
     Exclusive,      ///< Bypasses the mixer: lower latency, device locked to us.
 };
 
+/// How a multi-channel capture device is folded into the internal signal path.
+///
+/// A stereo input carrying one microphone on one leg is the common case: an
+/// interface presents two channels, a single microphone is plugged into the
+/// first, and the second is silence. Feeding that straight through halves the
+/// level and puts the voice on one side.
+enum class InputMix : int {
+    Stereo = 0,  ///< Take the channels as they arrive.
+    MonoLeft,    ///< Channel 1 only, copied to both.
+    MonoRight,   ///< Channel 2 only, copied to both.
+    MonoSum,     ///< Average of the channels, copied to both.
+};
+
 const char* toString(BackendType b);
 const char* toString(WasapiMode m);
+const char* toString(InputMix m);
 
 /// Stable identifier for a device, used to reconnect across restarts.
 /// For WASAPI this is the endpoint id string, for ASIO the driver name,

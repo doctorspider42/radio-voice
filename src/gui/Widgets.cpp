@@ -56,6 +56,18 @@ bool knobImpl(const char* label, float* value, float minimum, float maximum,
                                       ImGui::CalcTextSize(label).x,
                                       ImGui::CalcTextSize(initialText).x});
 
+    // Wrap onto the next line when this knob will not fit on the current one.
+    //
+    // Panels are laid out with explicit SameLine calls, which is fine until the
+    // window is narrower than the author assumed - then the last knobs on a row
+    // are silently clipped, and a control the user cannot see is worse than one
+    // that moved. Deciding here rather than at every call site means every knob
+    // row is responsive without the panels having to think about it.
+    if (ImGui::GetCursorPosX() > ImGui::GetCursorStartPos().x + 1.0f &&
+        ImGui::GetContentRegionAvail().x < itemWidth) {
+        ImGui::NewLine();
+    }
+
     // Label above, knob, value below - all inside one invisible item so the
     // whole stack participates in layout and hit testing as a unit.
     const ImVec2 totalSize(itemWidth, labelHeight + 4 + diameter + 2 + labelHeight);

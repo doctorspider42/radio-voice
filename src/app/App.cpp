@@ -12,6 +12,7 @@
 
 #include "core/Log.h"
 #include "core/Strings.h"
+#include "dsp/Compressor.h"
 #include "dsp/GraphicEq.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/Smoothing.h"
@@ -274,8 +275,11 @@ void App::buildChainFromConfig()
     // A configuration with no chain at all is a first run; give it the default
     // voice path rather than a bypassed signal.
     if (config_.chain.empty()) {
+        // Gate first so the compressor is not asked to ride the noise floor,
+        // EQ before the compressor so it reacts to the shaped signal.
         config_.chain.push_back({"gate", false, "", "", "", ""});
         config_.chain.push_back({"equalizer", false, "", "", "", ""});
+        config_.chain.push_back({"compressor", false, "", "", "", ""});
     }
 
     for (const auto& entry : config_.chain) {
@@ -285,6 +289,8 @@ void App::buildChainFromConfig()
             node = std::make_shared<dsp::NoiseGate>(params_, meters_);
         } else if (entry.kind == "equalizer") {
             node = std::make_shared<dsp::GraphicEq>(params_);
+        } else if (entry.kind == "compressor") {
+            node = std::make_shared<dsp::Compressor>(params_, meters_);
         } else if (entry.kind == "vst3") {
             host::PluginDescriptor descriptor;
             descriptor.path   = entry.pluginPath;
@@ -382,6 +388,9 @@ void App::captureChainToConfig()
             case dsp::NodeKind::Equalizer:
                 entry.kind = "equalizer";
                 break;
+            case dsp::NodeKind::Compressor:
+                entry.kind = "compressor";
+                break;
             case dsp::NodeKind::Vst3Plugin: {
                 auto* plugin = static_cast<host::Vst3Plugin*>(node.get());
                 entry.kind        = "vst3";
@@ -426,9 +435,14 @@ void App::render()
     const float bodyHeight = ImGui::GetContentRegionAvail().y - transportHeight -
                              ImGui::GetStyle().ItemSpacing.y;
 
-    const float leftWidth  = 320.0f;
-    const float rightWidth = 340.0f;
-    const float centreWidth = ImGui::GetContentRegionAvail().x - leftWidth - rightWidth -
+    // Proportional with a floor and a ceiling, not fixed. Fixed side columns
+    // look right at the size they were designed for and squeeze the centre to
+    // nothing on a smaller window - which is where the EQ and the dynamics
+    // panels live, so it is the worst place to lose room.
+    const float totalWidth  = ImGui::GetContentRegionAvail().x;
+    const float leftWidth   = std::clamp(totalWidth * 0.23f, 250.0f, 340.0f);
+    const float rightWidth  = std::clamp(totalWidth * 0.24f, 260.0f, 360.0f);
+    const float centreWidth = totalWidth - leftWidth - rightWidth -
                               ImGui::GetStyle().ItemSpacing.x * 2;
 
     ImGui::BeginChild("##left", ImVec2(leftWidth, bodyHeight), ImGuiChildFlags_Borders);
@@ -751,10 +765,56 @@ void App::renderIoPanel()
     ImGui::Spacing();
 
     renderDeviceSelector("Microphone", config_.input, true);
+
+    // --- input fold-down --------------------------------------------------
+    // Sits with the input device because it is a property of how that device is
+    // read, not of the processing. The common case it exists for: an interface
+    // presenting two channels with a single microphone on the first, where
+    // taking both gives a voice on one side and silence on the other.
+    {
+        const InputMix modes[] = {InputMix::Stereo, InputMix::MonoLeft,
+                                  InputMix::MonoRight, InputMix::MonoSum};
+        auto current = static_cast<InputMix>(params_.inputMix.load());
+
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##inputmix", toString(current))) {
+            for (InputMix mode : modes) {
+                if (ImGui::Selectable(toString(mode), mode == current)) {
+                    params_.inputMix.store(static_cast<int>(mode));
+                    markDirty();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "How the capture device's channels are folded into the chain.\n"
+                "Pick a single channel when one microphone is plugged into a\n"
+                "stereo input; summing both would halve its level.");
+        }
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
     renderDeviceSelector("Output", config_.output, false);
+
+    {
+        bool mono = params_.monoOutput.load();
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        ImGui::TextUnformatted("mono output");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+        if (toggleSwitch("monoOut", &mono)) {
+            params_.monoOutput.store(mono);
+            markDirty();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Sums the processed signal to mono before it reaches the\n"
+                              "output device, so both channels carry the same audio.");
+        }
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -877,9 +937,10 @@ void App::renderVirtualCableHint()
 
 void App::renderProcessingPanel()
 {
-    // Tall enough for both knob rows of the gate plus its labels; anything
-    // shorter clips the second row behind a scrollbar.
-    const float dynamicsHeight = 260.0f;
+    // Two knob rows plus the checkbox row the compressor adds. Knobs wrap onto
+    // further rows on a narrow window, so this is a floor rather than an exact
+    // fit - the panels scroll if a very narrow window pushes them past it.
+    const float dynamicsHeight = 305.0f;
     const float eqHeight = ImGui::GetContentRegionAvail().y - dynamicsHeight -
                            ImGui::GetStyle().ItemSpacing.y;
 
@@ -958,17 +1019,52 @@ void App::renderProcessingPanel()
 
     ImGui::BeginChild("##dynamics", ImVec2(0, 0), ImGuiChildFlags_None);
     {
-        const float half = (ImGui::GetContentRegionAvail().x -
-                            ImGui::GetStyle().ItemSpacing.x) * 0.55f;
+        const float spacing   = ImGui::GetStyle().ItemSpacing.x;
+        const float available = ImGui::GetContentRegionAvail().x;
 
-        ImGui::BeginChild("##gate", ImVec2(half, 0), ImGuiChildFlags_Borders);
-        renderGatePanel();
-        ImGui::EndChild();
+        // Three panels abreast need roughly this much to show their knobs
+        // without wrapping them into a scrollbar. Below it the limiter - the
+        // smallest of the three - drops to its own full-width row underneath.
+        constexpr float kThreeColumnMinimum = 660.0f;
 
-        ImGui::SameLine();
-        ImGui::BeginChild("##limiter", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        renderLimiterPanel();
-        ImGui::EndChild();
+        if (available >= kThreeColumnMinimum) {
+            const float usable = available - spacing * 2;
+
+            // The gate and the compressor carry four knobs per row each, so
+            // they get near-equal width. Making the gate narrower is what
+            // pushes its fourth knob onto a third row and starts the panel
+            // scrolling, hiding controls that had room a moment earlier.
+            ImGui::BeginChild("##gate", ImVec2(usable * 0.39f, 0), ImGuiChildFlags_Borders);
+            renderGatePanel();
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+            ImGui::BeginChild("##comp", ImVec2(usable * 0.40f, 0), ImGuiChildFlags_Borders);
+            renderCompressorPanel();
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+            ImGui::BeginChild("##limiter", ImVec2(0, 0), ImGuiChildFlags_Borders);
+            renderLimiterPanel();
+            ImGui::EndChild();
+        } else {
+            const float usable    = available - spacing;
+            const float topHeight = ImGui::GetContentRegionAvail().y * 0.62f;
+
+            ImGui::BeginChild("##gate", ImVec2(usable * 0.46f, topHeight),
+                              ImGuiChildFlags_Borders);
+            renderGatePanel();
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+            ImGui::BeginChild("##comp", ImVec2(0, topHeight), ImGuiChildFlags_Borders);
+            renderCompressorPanel();
+            ImGui::EndChild();
+
+            ImGui::BeginChild("##limiter", ImVec2(0, 0), ImGuiChildFlags_Borders);
+            renderLimiterPanel();
+            ImGui::EndChild();
+        }
     }
     ImGui::EndChild();
 }
@@ -1008,13 +1104,16 @@ void App::renderGatePanel()
         }
     };
 
-    knobRow("threshold", params_.gateThresholdDb, -80.0f, 0.0f, "%.0f dB", -45.0f, false);
+    // Labels are abbreviated because the knob widget sizes itself to its widest
+    // part; spelled out, "sidechain HP" alone would be wider than the four
+    // knobs it shares a row with.
+    knobRow("thresh", params_.gateThresholdDb, -80.0f, 0.0f, "%.0f dB", -45.0f, false);
     ImGui::SameLine();
     knobRow("range", params_.gateRangeDb, -90.0f, -6.0f, "%.0f dB", -60.0f, false);
     ImGui::SameLine();
-    knobRow("hysteresis", params_.gateHysteresisDb, 0.0f, 24.0f, "%.0f dB", 6.0f, false);
+    knobRow("hyst", params_.gateHysteresisDb, 0.0f, 24.0f, "%.0f dB", 6.0f, false);
     ImGui::SameLine();
-    knobRow("sidechain HP", params_.gateSidechainHpfHz, 20.0f, 1000.0f, "%.0f Hz", 120.0f, true);
+    knobRow("SC HP", params_.gateSidechainHpfHz, 20.0f, 1000.0f, "%.0f Hz", 120.0f, true);
 
     ImGui::Spacing();
 
@@ -1024,13 +1123,101 @@ void App::renderGatePanel()
     ImGui::SameLine();
     knobRow("release", params_.gateReleaseMs, 5.0f, 2000.0f, "%.0f ms", 180.0f, true);
     ImGui::SameLine();
-    knobRow("lookahead", params_.gateLookaheadMs, 0.0f, 20.0f, "%.1f ms", 3.0f, false);
+    knobRow("look", params_.gateLookaheadMs, 0.0f, 20.0f, "%.1f ms", 3.0f, false);
 
-    ImGui::SameLine(0, 18);
+    ImGui::SameLine(0, 12);
     ImGui::BeginGroup();
     ImGui::TextDisabled("GR");
     gainReductionMeter("gateGr", meters_.gateReductionDb.load(), -60.0f, ImVec2(14, 72));
     ImGui::EndGroup();
+}
+
+void App::renderCompressorPanel()
+{
+    ImGui::PushFont(fonts_.medium, 0.0f);
+    ImGui::TextUnformatted("Compressor");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+
+    bool enabled = params_.compEnabled.load();
+    if (toggleSwitch("compEnable", &enabled)) {
+        params_.compEnabled.store(enabled);
+        params_.touch();
+        markDirty();
+    }
+
+    ImGui::Spacing();
+
+    auto knobRow = [&](const char* label, std::atomic<float>& target, float minimum,
+                       float maximum, const char* format, float defaultValue,
+                       bool logarithmic) {
+        float value = target.load();
+        const bool changed = logarithmic
+                                 ? knobLog(label, &value, minimum, maximum, format, defaultValue)
+                                 : knob(label, &value, minimum, maximum, format, defaultValue);
+        if (changed) {
+            target.store(value);
+            params_.touch();
+            markDirty();
+        }
+    };
+
+    knobRow("thresh", params_.compThresholdDb, -60.0f, 0.0f, "%.0f dB", -18.0f, false);
+    ImGui::SameLine();
+    knobRow("ratio", params_.compRatio, 1.0f, 20.0f, "%.1f:1", 3.0f, true);
+    ImGui::SameLine();
+    knobRow("knee", params_.compKneeDb, 0.0f, 24.0f, "%.0f dB", 6.0f, false);
+    ImGui::SameLine();
+
+    // With auto make-up on, the knob shows what the compressor computed rather
+    // than a stale manual value it is not using.
+    const bool autoMakeup = params_.compAutoMakeup.load();
+    if (autoMakeup) {
+        float computed = dsp::Compressor::autoMakeupDb(params_);
+        ImGui::BeginDisabled();
+        knob("makeup", &computed, -12.0f, 24.0f, "%.1f dB", 0.0f);
+        ImGui::EndDisabled();
+    } else {
+        knobRow("makeup", params_.compMakeupDb, -12.0f, 24.0f, "%.1f dB", 0.0f, false);
+    }
+
+    ImGui::Spacing();
+
+    knobRow("attack", params_.compAttackMs, 0.1f, 200.0f, "%.1f ms", 8.0f, true);
+    ImGui::SameLine();
+    knobRow("release", params_.compReleaseMs, 10.0f, 2000.0f, "%.0f ms", 120.0f, true);
+    ImGui::SameLine();
+    knobRow("SC HP", params_.compSidechainHpfHz, 20.0f, 1000.0f, "%.0f Hz", 100.0f, true);
+    ImGui::SameLine();
+    knobRow("look", params_.compLookaheadMs, 0.0f, 20.0f, "%.1f ms", 2.0f, false);
+
+    ImGui::SameLine(0, 12);
+    ImGui::BeginGroup();
+    ImGui::TextDisabled("GR");
+    gainReductionMeter("compGr", meters_.compressorReductionDb.load(), -24.0f, ImVec2(14, 72));
+    ImGui::EndGroup();
+
+    ImGui::Spacing();
+
+    bool autoMakeupToggle = autoMakeup;
+    if (ImGui::Checkbox("auto makeup", &autoMakeupToggle)) {
+        params_.compAutoMakeup.store(autoMakeupToggle);
+        params_.touch();
+        markDirty();
+    }
+
+    ImGui::SameLine(0, 16);
+    bool rms = params_.compRmsDetection.load();
+    if (ImGui::Checkbox("RMS", &rms)) {
+        params_.compRmsDetection.store(rms);
+        params_.touch();
+        markDirty();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("RMS follows loudness and sounds transparent on speech.\n"
+                          "Off is peak detection: catches every transient, reacts harder.");
+    }
 }
 
 void App::renderLimiterPanel()
@@ -1068,11 +1255,15 @@ void App::renderLimiterPanel()
     gainReductionMeter("limiterGr", meters_.limiterReductionDb.load(), -24.0f, ImVec2(14, 72));
     ImGui::EndGroup();
 
-    ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-    ImGui::TextWrapped("Catches overshoots before they reach the virtual cable, "
-                       "where the receiving application could not undo them.");
-    ImGui::PopStyleColor();
+    // Only worth the space when there is space; on a narrow window the knobs
+    // matter more than the explanation.
+    if (ImGui::GetContentRegionAvail().y > 40.0f) {
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        ImGui::TextWrapped("Catches overshoots before they reach the virtual cable, "
+                           "where the receiving application could not undo them.");
+        ImGui::PopStyleColor();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,13 +1338,17 @@ void App::renderChainPanel()
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 150);
 
-        bool bypassToggle = bypassed;
-        if (toggleSwitch("bypass", &bypassToggle)) {
-            node->setBypassed(bypassToggle);
+        // The switch reads as "enabled", not "bypassed": on and lit means the
+        // module is doing something. The inverse - a lit switch meaning the
+        // module is switched out of the path - is backwards from how every
+        // other control in the application behaves.
+        bool enabled = !bypassed;
+        if (toggleSwitch("enable", &enabled)) {
+            node->setBypassed(!enabled);
             markDirty();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(bypassed ? "bypassed" : "active");
+            ImGui::SetTooltip(enabled ? "active - click to bypass" : "bypassed");
 
         if (isPlugin) {
             auto* plugin = static_cast<host::Vst3Plugin*>(node.get());
@@ -1200,8 +1395,12 @@ void App::renderChainPanel()
                                    [](const dsp::NodePtr& n) {
                                        return n->kind() == dsp::NodeKind::Equalizer;
                                    });
+    const bool hasComp = std::any_of(chainNodes_.begin(), chainNodes_.end(),
+                                     [](const dsp::NodePtr& n) {
+                                         return n->kind() == dsp::NodeKind::Compressor;
+                                     });
 
-    if (!hasGate || !hasEq) {
+    if (!hasGate || !hasEq || !hasComp) {
         ImGui::Separator();
         if (!hasGate && ImGui::SmallButton("Add noise gate")) {
             chainNodes_.push_back(std::make_shared<dsp::NoiseGate>(params_, meters_));
@@ -1209,6 +1408,10 @@ void App::renderChainPanel()
         }
         if (!hasEq && ImGui::SmallButton("Add equalizer")) {
             chainNodes_.push_back(std::make_shared<dsp::GraphicEq>(params_));
+            publishChain();
+        }
+        if (!hasComp && ImGui::SmallButton("Add compressor")) {
+            chainNodes_.push_back(std::make_shared<dsp::Compressor>(params_, meters_));
             publishChain();
         }
     }

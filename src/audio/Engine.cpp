@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "audio/DirectSoundStream.h"
 #include "audio/SampleFormat.h"
@@ -434,6 +435,32 @@ void Engine::processChunk(float* dst, int dstChannels, int frames)
     inputPlanar_.setActiveFrames(available);
     inputPlanar_.readInterleaved(staging_.data(), inputChannels, available);
 
+    // ---- input fold-down -------------------------------------------------
+    // Applied before the resampler so everything downstream, including the
+    // meters and the spectrum, sees what the chain will actually process.
+    const auto mix = static_cast<InputMix>(params_.inputMix.load(std::memory_order_relaxed));
+    if (mix != InputMix::Stereo && internalChannels_ > 0) {
+        float* first = inputPlanar_.channel(0);
+
+        if (mix == InputMix::MonoSum) {
+            const float scale = 1.0f / static_cast<float>(internalChannels_);
+            for (int i = 0; i < available; ++i) {
+                float sum = 0.0f;
+                for (int c = 0; c < internalChannels_; ++c)
+                    sum += inputPlanar_.channel(c)[i];
+                first[i] = sum * scale;
+            }
+        } else if (mix == InputMix::MonoRight && internalChannels_ > 1) {
+            std::memcpy(first, inputPlanar_.channel(1),
+                        static_cast<size_t>(available) * sizeof(float));
+        }
+        // MonoLeft needs nothing: channel 0 already holds it.
+
+        for (int c = 1; c < internalChannels_; ++c)
+            std::memcpy(inputPlanar_.channel(c), first,
+                        static_cast<size_t>(available) * sizeof(float));
+    }
+
     work_.setActiveFrames(frames);
 
     bool underrun = false;
@@ -491,6 +518,23 @@ void Engine::processChunk(float* dst, int dstChannels, int frames)
             for (int c = 0; c < internalChannels_; ++c)
                 work_.channel(c)[i] *= g;
         }
+    }
+
+    // ---- output fold-down ------------------------------------------------
+    // After the limiter, so summing cannot push the result back over the
+    // ceiling the limiter just enforced.
+    if (params_.monoOutput.load(std::memory_order_relaxed) && internalChannels_ > 1) {
+        const float scale = 1.0f / static_cast<float>(internalChannels_);
+        float* first = work_.channel(0);
+
+        for (int i = 0; i < frames; ++i) {
+            float sum = 0.0f;
+            for (int c = 0; c < internalChannels_; ++c)
+                sum += work_.channel(c)[i];
+            first[i] = sum * scale;
+        }
+        for (int c = 1; c < internalChannels_; ++c)
+            std::memcpy(work_.channel(c), first, static_cast<size_t>(frames) * sizeof(float));
     }
 
     outputMeter_.process(work_);

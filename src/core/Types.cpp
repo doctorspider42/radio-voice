@@ -21,4 +21,15 @@ const char* toString(WasapiMode m)
     return "?";
 }
 
+const char* toString(InputMix m)
+{
+    switch (m) {
+        case InputMix::Stereo:    return "Stereo";
+        case InputMix::MonoLeft:  return "Mono (left)";
+        case InputMix::MonoRight: return "Mono (right)";
+        case InputMix::MonoSum:   return "Mono (sum)";
+    }
+    return "?";
+}
+
 } // namespace rv

@@ -272,8 +272,17 @@ podaje sygnał do kabla. Zamknięcie okna zatrzymuje tor.
 - ustawienia zapisują się same; zamknięcie okna zapisuje też stan wtyczek
 
 Ustawianie bramki: gadaj normalnie i zjeżdżaj progiem w dół, aż wskaźnik
-**OPEN/SHUT** przestanie migotać między słowami. `hysteresis` powiększ, jeśli
-bramka nadal „klekocze”.
+**OPEN/SHUT** przestanie migotać między słowami. `hyst` powiększ, jeśli bramka
+nadal „klekocze”.
+
+Ustawianie kompresora: zjeżdżaj progiem, aż miernik **GR** pokazuje 3–6 dB na
+głośniejszych sylabach. `ratio` 3:1 wystarcza do mowy, `auto makeup` sam
+wyrówna głośność. Zostaw **RMS** włączone — reaguje na głośność, nie na
+pojedyncze transjenty, i na mowie jest przez to niesłyszalny.
+
+Jeśli masz jeden mikrofon w stereofonicznym wejściu interfejsu, ustaw tryb
+kanałów wejścia (pod wyborem mikrofonu) na **Mono (left)** albo **Mono
+(right)** — inaczej głos wyjdzie po jednej stronie.
 
 ---
 

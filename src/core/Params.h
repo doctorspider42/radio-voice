@@ -49,6 +49,25 @@ struct Params {
     std::atomic<float> gateLookaheadMs{3.0f};
     std::atomic<float> gateSidechainHpfHz{120.0f}; ///< Keeps rumble from opening the gate.
 
+    // -- compressor --------------------------------------------------------
+    std::atomic<bool>  compEnabled{true};
+    std::atomic<float> compThresholdDb{-18.0f};
+    std::atomic<float> compRatio{3.0f};
+    std::atomic<float> compKneeDb{6.0f};        ///< Width of the soft knee, centred on the threshold.
+    std::atomic<float> compAttackMs{8.0f};
+    std::atomic<float> compReleaseMs{120.0f};
+    std::atomic<float> compMakeupDb{0.0f};
+    std::atomic<bool>  compAutoMakeup{true};
+    std::atomic<float> compLookaheadMs{2.0f};
+    std::atomic<float> compSidechainHpfHz{100.0f};
+    std::atomic<bool>  compRmsDetection{true};  ///< RMS follows loudness; peak follows transients.
+
+    // -- input routing -----------------------------------------------------
+    /// Stored as an int so it can live in an atomic; see InputMix.
+    std::atomic<int>  inputMix{static_cast<int>(InputMix::Stereo)};
+    /// Sums the processed signal to mono before it reaches the output device.
+    std::atomic<bool> monoOutput{false};
+
     // -- output limiter ----------------------------------------------------
     std::atomic<bool>  limiterEnabled{true};
     std::atomic<float> limiterCeilingDb{-1.0f};
@@ -92,6 +111,19 @@ struct Params {
         gateReleaseMs.store(180.0f);
         gateLookaheadMs.store(3.0f);
         gateSidechainHpfHz.store(120.0f);
+        compEnabled.store(true);
+        compThresholdDb.store(-18.0f);
+        compRatio.store(3.0f);
+        compKneeDb.store(6.0f);
+        compAttackMs.store(8.0f);
+        compReleaseMs.store(120.0f);
+        compMakeupDb.store(0.0f);
+        compAutoMakeup.store(true);
+        compLookaheadMs.store(2.0f);
+        compSidechainHpfHz.store(100.0f);
+        compRmsDetection.store(true);
+        inputMix.store(static_cast<int>(InputMix::Stereo));
+        monoOutput.store(false);
         limiterEnabled.store(true);
         limiterCeilingDb.store(-1.0f);
         limiterReleaseMs.store(80.0f);
@@ -107,6 +139,7 @@ struct Meters {
     std::atomic<float> outputPeak{0.0f};
     std::atomic<float> outputRms{0.0f};
     std::atomic<float> gateReductionDb{0.0f};
+    std::atomic<float> compressorReductionDb{0.0f};
     std::atomic<float> limiterReductionDb{0.0f};
     std::atomic<bool>  gateOpen{false};
 
@@ -133,6 +166,7 @@ struct Meters {
         outputPeak.store(0.0f);
         outputRms.store(0.0f);
         gateReductionDb.store(0.0f);
+        compressorReductionDb.store(0.0f);
         limiterReductionDb.store(0.0f);
         gateOpen.store(false);
         cpuLoad.store(0.0f);

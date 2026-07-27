@@ -120,11 +120,18 @@ budowania i lokalnego podpisywania: [`driver/README.md`](driver/README.md).
   kółko nad uchwytem zmienia Q
 - **Noise Gate** — próg, zakres, histereza, atak/hold/release, lookahead oraz
   filtr HP w torze detektora
+- **Compressor** — miękkie kolano, detekcja RMS albo szczytowa, lookahead,
+  filtr HP w torze detektora, auto makeup; ballistyka liczona w dziedzinie dB
 - **Output Limiter** — brickwall z lookahead, chroni wirtualny kabel przed
   przesterowaniem
-- **Processing Chain** — bramka, EQ i wtyczki VST3 w jednej, przestawialnej
-  liście; każdy element z osobnym bypassem, wtyczki z własnym oknem edytora
-  albo listą parametrów
+- **Processing Chain** — bramka, EQ, kompresor i wtyczki VST3 w jednej,
+  przestawialnej liście; każdy element z osobnym włącznikiem, wtyczki z własnym
+  oknem edytora albo listą parametrów
+
+Downmix: pod wyborem mikrofonu jest tryb składania kanałów wejścia (stereo,
+lewy, prawy, suma), a pod wyjściem przełącznik sumowania do mono. Pierwsze
+przydaje się, gdy jeden mikrofon siedzi w stereofonicznym wejściu interfejsu —
+branie obu kanałów daje wtedy głos po jednej stronie i ciszę po drugiej.
 
 Konfiguracja, łańcuch i stan wtyczek zapisują się w
 `%APPDATA%\RadioVoice\config.json`. Log: `%APPDATA%\RadioVoice\radiovoice.log`.
