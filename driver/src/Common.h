@@ -53,24 +53,39 @@
 //=============================================================================
 // Audio format
 //
-// Exactly one format is advertised, deliberately.
+// Two layers, and keeping them apart matters.
 //
-// The loopback is a byte-for-byte copy between the two endpoints, so if the
-// render side could open at 16-bit 44.1 kHz while the capture side opened at
-// 32-bit float 48 kHz, the bytes crossing the ring would be meaningless. A
-// single supported format makes that mismatch unrepresentable rather than
-// something the ring has to detect and convert.
+// The *wire* format is what a pin advertises and what the client's buffer
+// holds. Several are offered - 16 and 24 bit PCM as well as 32 bit float -
+// because the audio engine negotiates a format before it will build an
+// endpoint at all, and a pin offering a single point with no PCM among it
+// gives it nothing to agree to. It does not report an error; it silently
+// declines to create the endpoint, which is indistinguishable from the driver
+// not being there.
 //
-// Windows' audio engine resamples and reformats transparently for any client
-// that wants something else, so this costs nothing in compatibility.
+// The *internal* format is what crosses the loopback ring: always 32 bit
+// signed integer. Fixing it means the two endpoints can negotiate
+// independently without the ring having to care.
+//
+// Integer, not float, and that is not a detail. Kernel code on x64 may only
+// touch floating point or SSE registers between KeSaveExtendedProcessorState
+// and KeRestoreExtendedProcessorState - using them bare corrupts the floating
+// point state of whichever user-mode thread happened to be interrupted. With
+// a 32 bit integer hub every conversion is a shift, so the question never
+// arises and nothing has to be saved on a path that runs every few
+// milliseconds.
+//
+// 32 bits also means the widest advertised wire format (24 bit) converts in
+// and back out without losing anything.
 //=============================================================================
 
 #define RV_SAMPLE_RATE      48000
 #define RV_CHANNELS         2
-#define RV_BITS_PER_SAMPLE  32       // IEEE float
-#define RV_BYTES_PER_SAMPLE (RV_BITS_PER_SAMPLE / 8)
-#define RV_FRAME_SIZE       (RV_CHANNELS * RV_BYTES_PER_SAMPLE)
-#define RV_BYTES_PER_SECOND (RV_SAMPLE_RATE * RV_FRAME_SIZE)
+
+// Internal (ring) format: 32-bit signed PCM.
+#define RV_INTERNAL_BYTES_PER_SAMPLE 4
+#define RV_INTERNAL_FRAME_SIZE       (RV_CHANNELS * RV_INTERNAL_BYTES_PER_SAMPLE)
+#define RV_INTERNAL_BYTES_PER_SECOND (RV_SAMPLE_RATE * RV_INTERNAL_FRAME_SIZE)
 
 //=============================================================================
 // Buffering
@@ -89,7 +104,7 @@
 // endpoints' timers drifting apart before either is opened in lockstep, small
 // enough that the added delay is inaudible.
 #define RV_LOOPBACK_MS 40
-#define RV_LOOPBACK_BYTES ((RV_BYTES_PER_SECOND / 1000) * RV_LOOPBACK_MS)
+#define RV_LOOPBACK_BYTES ((RV_INTERNAL_BYTES_PER_SECOND / 1000) * RV_LOOPBACK_MS)
 
 //=============================================================================
 // Pin and node indices

@@ -21,23 +21,32 @@
 // Data ranges
 //=============================================================================
 
-// The single advertised stream format. See the note in Common.h for why there
-// is exactly one.
+// Advertised stream formats.
+//
+// PCM comes first and deliberately spans a range of depths rather than naming a
+// single one. The audio engine negotiates a format before it will build an
+// endpoint, and a pin offering one point - particularly a float-only point -
+// leaves it nothing to agree to. It then declines silently, which looks exactly
+// like a driver that never loaded.
 RV_PAGED_CONST static const KSDATARANGE_AUDIO g_pcmStreamRange = {
     {
         sizeof(KSDATARANGE_AUDIO),
         0, 0, 0,
         STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT),
+        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
         STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
     },
-    RV_CHANNELS,        // MaximumChannels
-    RV_BITS_PER_SAMPLE, // MinimumBitsPerSample
-    RV_BITS_PER_SAMPLE, // MaximumBitsPerSample
-    RV_SAMPLE_RATE,     // MinimumSampleFrequency
-    RV_SAMPLE_RATE      // MaximumSampleFrequency
+    RV_CHANNELS,    // MaximumChannels
+    16,             // MinimumBitsPerSample
+    24,             // MaximumBitsPerSample
+    RV_SAMPLE_RATE, // MinimumSampleFrequency
+    RV_SAMPLE_RATE  // MaximumSampleFrequency
 };
 
+// PCM only, no float range. A float wire format would force the driver to
+// convert in floating point, which kernel code on x64 may not do without
+// saving the interrupted thread's FP state first - see Common.h. Nothing is
+// lost: the audio engine converts for any client that wants float.
 RV_PAGED_CONST static const PKSDATARANGE g_streamRanges[] = {
     PKSDATARANGE(&g_pcmStreamRange)
 };

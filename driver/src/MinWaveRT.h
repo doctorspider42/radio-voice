@@ -96,10 +96,22 @@ private:
     /// Signals whatever notification events the OS registered.
     void SignalNotifications();
 
-    /// Confirms a proposed format is the one and only format this driver
-    /// advertises. A mismatch here means the intersection handler let something
-    /// through that it should not have.
-    static BOOLEAN IsSupportedFormat(PKSDATAFORMAT format);
+    /// Reads a negotiated format into the wire-format members below.
+    /// Returns false for anything outside what the data ranges advertise.
+    BOOLEAN ParseFormat(PKSDATAFORMAT format);
+
+    /// Wire format of this stream - what the client's buffer actually holds.
+    /// 16 or 24 bit PCM, not known until the format is negotiated. The loopback
+    /// ring is always 32-bit PCM regardless, and these describe what has to be
+    /// converted to and from it.
+    ULONG m_wireBytesPerSample = 2;
+    ULONG m_wireFrameBytes     = RV_CHANNELS * 2;
+    ULONG m_wireBytesPerSecond = RV_SAMPLE_RATE * RV_CHANNELS * 2;
+
+    /// Conversion scratch, in the internal 32-bit format. Allocated with the
+    /// audio buffer so the timer callback never allocates.
+    PVOID m_scratch     = nullptr;
+    ULONG m_scratchSize = 0;
 
     MiniportWaveRT* m_miniport = nullptr;
     PPORTWAVERTSTREAM m_portStream = nullptr;

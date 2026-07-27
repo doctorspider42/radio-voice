@@ -218,34 +218,93 @@ MiniportWaveRTStream::NonDelegatingQueryInterface(_In_ REFIID Interface,
     return STATUS_SUCCESS;
 }
 
-BOOLEAN MiniportWaveRTStream::IsSupportedFormat(PKSDATAFORMAT format)
+BOOLEAN MiniportWaveRTStream::ParseFormat(PKSDATAFORMAT format)
 {
     PAGED_CODE();
 
     if (!format || format->FormatSize < sizeof(KSDATAFORMAT_WAVEFORMATEX))
         return FALSE;
 
-    const auto* waveFormat = &reinterpret_cast<PKSDATAFORMAT_WAVEFORMATEX>(format)->WaveFormatEx;
+    const auto* wave = &reinterpret_cast<PKSDATAFORMAT_WAVEFORMATEX>(format)->WaveFormatEx;
 
-    if (waveFormat->nChannels != RV_CHANNELS ||
-        waveFormat->nSamplesPerSec != RV_SAMPLE_RATE ||
-        waveFormat->wBitsPerSample != RV_BITS_PER_SAMPLE) {
+    if (wave->nChannels != RV_CHANNELS || wave->nSamplesPerSec != RV_SAMPLE_RATE)
+        return FALSE;
+
+    // Clients use either the plain tag or the extensible wrapper, and the two
+    // describe the same bytes; only the subtype tells them apart.
+    if (wave->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wave);
+        if (!IsEqualGUIDAligned(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_PCM))
+            return FALSE;
+    } else if (wave->wFormatTag != WAVE_FORMAT_PCM) {
         return FALSE;
     }
 
-    // Both the plain float tag and the extensible wrapper around it are
-    // accepted; clients use either, and they describe the same bytes.
-    if (waveFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
-        return TRUE;
+    if (wave->wBitsPerSample != 16 && wave->wBitsPerSample != 24)
+        return FALSE;
 
-    if (waveFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(waveFormat);
-        return IsEqualGUIDAligned(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
-                   ? TRUE : FALSE;
+    m_wireBytesPerSample = wave->wBitsPerSample / 8u;
+    m_wireFrameBytes     = m_wireBytesPerSample * RV_CHANNELS;
+    m_wireBytesPerSecond = m_wireFrameBytes * RV_SAMPLE_RATE;
+
+    return TRUE;
+}
+
+//-----------------------------------------------------------------------------
+// Wire <-> internal conversion
+//
+// The ring holds 32-bit signed PCM; the client's buffer holds 16 or 24 bit.
+// Both directions are pure shifts, so there is no rounding to argue about and,
+// more importantly, no floating point in a driver - see the note in Common.h.
+//
+// Left-aligning into 32 bits rather than scaling means the round trip through
+// the ring is exact for every advertised width.
+//-----------------------------------------------------------------------------
+
+namespace {
+
+void WireToInternal(const void* source, ULONG bytesPerSample, LONG* destination,
+                    ULONG samples)
+{
+    if (bytesPerSample == 2) {
+        const auto* pcm = static_cast<const SHORT*>(source);
+        for (ULONG i = 0; i < samples; ++i)
+            destination[i] = static_cast<LONG>(pcm[i]) << 16;
+        return;
     }
 
-    return FALSE;
+    // 24-bit, three bytes little-endian, sign extended from bit 23.
+    const auto* bytes = static_cast<const UCHAR*>(source);
+    for (ULONG i = 0; i < samples; ++i) {
+        const ULONG raw = static_cast<ULONG>(bytes[0]) |
+                          (static_cast<ULONG>(bytes[1]) << 8) |
+                          (static_cast<ULONG>(bytes[2]) << 16);
+        destination[i] = static_cast<LONG>(raw << 8);
+        bytes += 3;
+    }
 }
+
+void InternalToWire(const LONG* source, void* destination, ULONG bytesPerSample,
+                    ULONG samples)
+{
+    if (bytesPerSample == 2) {
+        auto* pcm = static_cast<SHORT*>(destination);
+        for (ULONG i = 0; i < samples; ++i)
+            pcm[i] = static_cast<SHORT>(source[i] >> 16);
+        return;
+    }
+
+    auto* bytes = static_cast<UCHAR*>(destination);
+    for (ULONG i = 0; i < samples; ++i) {
+        const LONG value = source[i] >> 8;
+        bytes[0] = static_cast<UCHAR>(value & 0xFF);
+        bytes[1] = static_cast<UCHAR>((value >> 8) & 0xFF);
+        bytes[2] = static_cast<UCHAR>((value >> 16) & 0xFF);
+        bytes += 3;
+    }
+}
+
+} // namespace
 
 NTSTATUS MiniportWaveRTStream::Init(MiniportWaveRT* miniport,
                                     PPORTWAVERTSTREAM portStream,
@@ -254,7 +313,7 @@ NTSTATUS MiniportWaveRTStream::Init(MiniportWaveRT* miniport,
 {
     PAGED_CODE();
 
-    if (!IsSupportedFormat(dataFormat)) {
+    if (!ParseFormat(dataFormat)) {
         RV_LOG("stream refused: unsupported format");
         return STATUS_NOT_SUPPORTED;
     }
@@ -289,8 +348,9 @@ NTSTATUS MiniportWaveRTStream::AllocateBuffer(ULONG requestedSize,
     if (m_buffer)
         return STATUS_DEVICE_BUSY;
 
-    const ULONG minSize = (RV_BYTES_PER_SECOND / 1000) * RV_MIN_BUFFER_MS;
-    const ULONG maxSize = (RV_BYTES_PER_SECOND / 1000) * RV_MAX_BUFFER_MS;
+    // Sizes are in wire bytes, because that is what the client's buffer holds.
+    const ULONG minSize = (m_wireBytesPerSecond / 1000) * RV_MIN_BUFFER_MS;
+    const ULONG maxSize = (m_wireBytesPerSecond / 1000) * RV_MAX_BUFFER_MS;
 
     ULONG size = requestedSize;
     if (size < minSize) size = minSize;
@@ -299,7 +359,7 @@ NTSTATUS MiniportWaveRTStream::AllocateBuffer(ULONG requestedSize,
     // Whole frames, and a whole number of notification periods so the timer
     // does not have to deal with a short final period every cycle.
     const ULONG periods = notificationCount ? notificationCount : 1;
-    const ULONG granularity = RV_FRAME_SIZE * periods;
+    const ULONG granularity = m_wireFrameBytes * periods;
     size = (size / granularity) * granularity;
     if (size == 0)
         size = granularity;
@@ -324,10 +384,24 @@ NTSTATUS MiniportWaveRTStream::AllocateBuffer(ULONG requestedSize,
     m_bufferSize  = size;
     m_notifyCount = notificationCount;
 
+    // Conversion scratch, sized for a whole buffer's worth of frames in the
+    // internal float format - the timer callback must never allocate.
+    const ULONG frames = size / m_wireFrameBytes;
+    m_scratchSize = frames * RV_INTERNAL_FRAME_SIZE;
+    m_scratch = ExAllocatePool2(POOL_FLAG_NON_PAGED, m_scratchSize, RV_POOL_TAG);
+    if (!m_scratch) {
+        IoFreeMdl(m_mdl);
+        m_mdl = nullptr;
+        ExFreePool(m_buffer);
+        m_buffer = nullptr;
+        m_scratchSize = 0;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     // The period is what the declared format says the buffer's worth of audio
     // takes to play, divided by the number of notifications the OS asked for.
     const ULONG bytesPerPeriod = size / periods;
-    m_period100ns = (LONGLONG)bytesPerPeriod * 10000000LL / RV_BYTES_PER_SECOND;
+    m_period100ns = (LONGLONG)bytesPerPeriod * 10000000LL / m_wireBytesPerSecond;
     if (m_period100ns <= 0)
         m_period100ns = (LONGLONG)RV_DEFAULT_PERIOD_MS * 10000LL;
 
@@ -354,7 +428,12 @@ void MiniportWaveRTStream::ReleaseBuffer()
         ExFreePool(m_buffer);
         m_buffer = nullptr;
     }
-    m_bufferSize = 0;
+    if (m_scratch) {
+        ExFreePool(m_scratch);
+        m_scratch = nullptr;
+    }
+    m_bufferSize  = 0;
+    m_scratchSize = 0;
 }
 
 STDMETHODIMP_(NTSTATUS)
@@ -487,7 +566,7 @@ void MiniportWaveRTStream::OnTick()
     // jump.
     const ULONGLONG now     = KeQueryInterruptTime();
     const ULONGLONG elapsed = now - m_startTime100ns;
-    const ULONGLONG target  = elapsed * RV_BYTES_PER_SECOND / 10000000ULL;
+    const ULONGLONG target  = elapsed * m_wireBytesPerSecond / 10000000ULL;
 
     ULONGLONG delta = (target > m_position) ? (target - m_position) : 0;
     if (delta == 0) {
@@ -501,23 +580,50 @@ void MiniportWaveRTStream::OnTick()
     if (delta > m_bufferSize)
         delta = m_bufferSize;
 
+    // Work in whole frames: a conversion cannot be split across a sample.
+    delta -= delta % m_wireFrameBytes;
+    if (delta == 0) {
+        KeReleaseInStackQueuedSpinLock(&handle);
+        return;
+    }
+
     ULONG offset = (ULONG)(m_position % m_bufferSize);
     ULONG remaining = (ULONG)delta;
 
     while (remaining > 0) {
-        const ULONG chunk = min(remaining, m_bufferSize - offset);
+        ULONG chunk = min(remaining, m_bufferSize - offset);
+        chunk -= chunk % m_wireFrameBytes;
+        if (chunk == 0)
+            break;
+
         PUCHAR at = static_cast<PUCHAR>(m_buffer) + offset;
 
-        if (m_capture)
-            g_loopback.Read(at, chunk);   // cable -> client
-        else
-            g_loopback.Write(at, chunk);  // client -> cable
+        const ULONG frames        = chunk / m_wireFrameBytes;
+        const ULONG samples       = frames * RV_CHANNELS;
+        const ULONG internalBytes = frames * RV_INTERNAL_FRAME_SIZE;
+        auto*       scratch       = static_cast<LONG*>(m_scratch);
+
+        if (internalBytes > m_scratchSize)
+            break;
+
+        if (m_capture) {
+            // cable -> client
+            g_loopback.Read(scratch, internalBytes);
+            InternalToWire(scratch, at, m_wireBytesPerSample, samples);
+        } else {
+            // client -> cable
+            WireToInternal(at, m_wireBytesPerSample, scratch, samples);
+            g_loopback.Write(scratch, internalBytes);
+        }
 
         offset = (offset + chunk) % m_bufferSize;
         remaining -= chunk;
+        m_position += chunk;
     }
 
-    m_position      = target;
+    // m_position was advanced by whatever was actually converted above, which
+    // is target rounded down to a frame boundary; the remainder carries into
+    // the next tick rather than being dropped.
     m_lastTime100ns = now;
 
     KeReleaseInStackQueuedSpinLock(&handle);
@@ -637,7 +743,14 @@ STDMETHODIMP_(NTSTATUS)
 MiniportWaveRTStream::SetFormat(_In_ PKSDATAFORMAT DataFormat)
 {
     PAGED_CODE();
-    return IsSupportedFormat(DataFormat) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+
+    // Refused once a buffer exists: its size and the timer period were both
+    // derived from the previous format, and changing it underneath them would
+    // leave the two disagreeing about how much a tick is worth.
+    if (m_buffer)
+        return STATUS_NOT_SUPPORTED;
+
+    return ParseFormat(DataFormat) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
 }
 
 STDMETHODIMP_(NTSTATUS)
