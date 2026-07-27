@@ -1,6 +1,7 @@
 #include "MinTopo.h"
 
 #include "Descriptors.h"
+#include "Diagnostics.h"
 
 #pragma code_seg("PAGE")
 
@@ -59,6 +60,13 @@ MiniportTopology::GetDescription(_Out_ PPCFILTER_DESCRIPTOR* Description)
 
     if (!Description)
         return STATUS_INVALID_PARAMETER;
+
+    // Counting these is the point of the whole exercise: if the endpoint
+    // builder never asks the topology filter to describe itself, nothing is
+    // looking at this driver at all - which is a completely different problem
+    // from it looking and then rejecting what it sees.
+    rvdiag::Count(m_direction == RvDirectionRender ? L"TopoRenderGetDescription"
+                                                   : L"TopoCaptureGetDescription");
 
     *Description = (m_direction == RvDirectionRender)
                        ? const_cast<PPCFILTER_DESCRIPTOR>(&g_topologyRenderFilterDescriptor)

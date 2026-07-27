@@ -1,6 +1,7 @@
 #include "MinWaveRT.h"
 
 #include "Descriptors.h"
+#include "Diagnostics.h"
 #include "LoopbackBuffer.h"
 
 //=============================================================================
@@ -65,6 +66,9 @@ MiniportWaveRT::GetDescription(_Out_ PPCFILTER_DESCRIPTOR* Description)
     if (!Description)
         return STATUS_INVALID_PARAMETER;
 
+    rvdiag::Count(m_direction == RvDirectionRender ? L"WaveRenderGetDescription"
+                                                   : L"WaveCaptureGetDescription");
+
     *Description = (m_direction == RvDirectionRender)
                        ? const_cast<PPCFILTER_DESCRIPTOR>(&g_waveRenderFilterDescriptor)
                        : const_cast<PPCFILTER_DESCRIPTOR>(&g_waveCaptureFilterDescriptor);
@@ -120,6 +124,9 @@ MiniportWaveRT::NewStream(_Out_ PMINIPORTWAVERTSTREAM* Stream,
                           _In_ PKSDATAFORMAT DataFormat)
 {
     PAGED_CODE();
+
+    rvdiag::Count(m_direction == RvDirectionRender ? L"WaveRenderNewStream"
+                                                   : L"WaveCaptureNewStream");
 
     if (!Stream || !PortStream || !DataFormat)
         return STATUS_INVALID_PARAMETER;

@@ -10,6 +10,7 @@
 */
 
 #include "Common.h"
+#include "Diagnostics.h"
 #include "MinTopo.h"
 #include "MinWaveRT.h"
 
@@ -87,6 +88,8 @@ NTSTATUS InstallEndpoint(_In_ PDEVICE_OBJECT DeviceObject,
 {
     PAGED_CODE();
 
+    const bool render = (direction == RvDirectionRender);
+
     NTSTATUS status = STATUS_SUCCESS;
     PUNKNOWN waveUnknown = nullptr;
     PUNKNOWN topologyUnknown = nullptr;
@@ -107,6 +110,7 @@ NTSTATUS InstallEndpoint(_In_ PDEVICE_OBJECT DeviceObject,
     status = InstallSubdevice(DeviceObject, Irp, ResourceList, waveName,
                               CLSID_PortWaveRT, PUNKNOWN(PMINIPORTWAVERT(waveMiniport)),
                               &waveUnknown);
+    rvdiag::RecordStatus(render ? L"WaveRenderSubdevice" : L"WaveCaptureSubdevice", status);
     if (!NT_SUCCESS(status))
         goto cleanup;
 
@@ -114,6 +118,7 @@ NTSTATUS InstallEndpoint(_In_ PDEVICE_OBJECT DeviceObject,
                               CLSID_PortTopology,
                               PUNKNOWN(PMINIPORTTOPOLOGY(topologyMiniport)),
                               &topologyUnknown);
+    rvdiag::RecordStatus(render ? L"TopoRenderSubdevice" : L"TopoCaptureSubdevice", status);
     if (!NT_SUCCESS(status))
         goto cleanup;
 
@@ -128,6 +133,8 @@ NTSTATUS InstallEndpoint(_In_ PDEVICE_OBJECT DeviceObject,
                                               topologyUnknown, RV_TOPO_CAPTURE_WAVE_OUT,
                                               waveUnknown, RV_WAVE_CAPTURE_SINK);
     }
+
+    rvdiag::RecordStatus(render ? L"PhysConnRender" : L"PhysConnCapture", status);
 
     if (!NT_SUCCESS(status))
         RV_LOG("PcRegisterPhysicalConnection failed for %S: 0x%08X", waveName, status);
@@ -155,6 +162,7 @@ extern "C" NTSTATUS RvStartDevice(_In_ PDEVICE_OBJECT DeviceObject,
     PAGED_CODE();
 
     RV_LOG("StartDevice");
+    rvdiag::Record(L"StartDeviceEntered", 1);
 
     if (!DeviceObject || !Irp)
         return STATUS_INVALID_PARAMETER;
@@ -176,6 +184,7 @@ extern "C" NTSTATUS RvStartDevice(_In_ PDEVICE_OBJECT DeviceObject,
     }
 
     RV_LOG("both endpoints registered");
+    rvdiag::Record(L"StartDeviceSucceeded", 1);
     return STATUS_SUCCESS;
 }
 

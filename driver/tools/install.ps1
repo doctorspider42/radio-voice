@@ -100,13 +100,23 @@ In order of likelihood:
     throw "pnputil failed with exit code $pnputilResult"
 }
 
-Write-Host ""
-Write-Host "Creating the root-enumerated device..."
-
 $devcon = Find-KitTool 'devcon.exe'
+Write-Host ""
 Write-Host "  devcon: $devcon"
 
-& $devcon install $inf 'root\RadioVoiceAudio'
+# 'install' creates a new device node every time it is run. On a machine that
+# already has one, that means a second, duplicate cable rather than the updated
+# driver - so an existing device is updated in place instead.
+$existing = Get-PnpDevice -FriendlyName '*RadioVoice*' -ErrorAction SilentlyContinue
+
+if ($existing) {
+    Write-Host "Updating the existing device..."
+    & $devcon update $inf 'root\RadioVoiceAudio'
+} else {
+    Write-Host "Creating the root-enumerated device..."
+    & $devcon install $inf 'root\RadioVoiceAudio'
+}
+
 if ($LASTEXITCODE -ne 0) {
     throw @"
 devcon failed with exit code $LASTEXITCODE.

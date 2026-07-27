@@ -8,6 +8,7 @@
 */
 
 #include "Common.h"
+#include "Diagnostics.h"
 #include "LoopbackBuffer.h"
 
 extern "C" {
@@ -34,6 +35,9 @@ extern "C" NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT  DriverObject,
                                 _In_ PUNICODE_STRING RegistryPath)
 {
     RV_LOG("DriverEntry");
+
+    rvdiag::Initialize();
+    rvdiag::Record(L"DriverEntry", 1);
 
     // The ring is allocated up front rather than on first stream: allocation
     // failure at this point is reportable, whereas failing inside a stream
