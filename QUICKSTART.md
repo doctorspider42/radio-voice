@@ -62,29 +62,29 @@ MSVC — MinGW tu nie wystarczy.
 
 ### Build
 
-Jedno polecenie:
+Z **katalogu głównego** repo:
 
 ```
 build.cmd
 ```
 
-Albo bezpośrednio przez CMake:
+Wynik: **`build\bin\RadioVoice.exe`**, ok. 2,8 MB. Pierwsza konfiguracja trwa
+~35 s (klonowanie ImGui i VST3 SDK), build ~1 min.
 
-```powershell
-cmake --preset mingw
-cmake --build --preset mingw
-```
-
-Pierwsza konfiguracja trwa ~35 s (klonowanie ImGui i VST3 SDK), build ~1 min.
-Wynik: **`build\bin\RadioVoice.exe`**, ok. 28 MB.
+> Uwaga: `driver\build-driver.cmd` to co innego — buduje sterownik jądra, nie
+> aplikację.
 
 Inne warianty:
 
 ```
-build.cmd debug      z symbolami i asercjami
+build.cmd reldbg     Release + symbole, gdy potrzebny stack trace  (~28 MB)
+build.cmd debug      bez optymalizacji, z asercjami
 build.cmd msvc       Visual Studio zamiast MinGW
 build.cmd no-vst3    bez hosta wtyczek — usuwa jedyną zależność copyleft
 ```
+
+Każdy wariant ma własny katalog (`build`, `build-reldbg`, `build-debug`…), więc
+przełączanie się między nimi nie wymusza przebudowy od zera.
 
 ### ASIO
 
@@ -171,7 +171,7 @@ Poniżej to samo krok po kroku, gdyby coś poszło nie tak.
 ### Krok 1 — zbuduj
 
 ```
-driver\build.cmd -Configuration Release
+driver\build-driver.cmd
 ```
 
 Wynik: `driver\build\Release\RadioVoiceAudio.sys` + `.inf`.

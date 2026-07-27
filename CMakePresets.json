@@ -4,19 +4,26 @@
   "configurePresets": [
     {
       "name": "mingw",
-      "displayName": "MinGW-w64 (Ninja)",
+      "displayName": "MinGW-w64, Release",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "gcc",
         "CMAKE_CXX_COMPILER": "g++"
       }
     },
     {
+      "name": "mingw-reldbg",
+      "inherits": "mingw",
+      "displayName": "MinGW-w64, Release with debug symbols",
+      "binaryDir": "${sourceDir}/build-reldbg",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
       "name": "mingw-debug",
       "inherits": "mingw",
-      "displayName": "MinGW-w64 (Debug)",
+      "displayName": "MinGW-w64, Debug",
       "binaryDir": "${sourceDir}/build-debug",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
@@ -37,6 +44,7 @@
   ],
   "buildPresets": [
     { "name": "mingw", "configurePreset": "mingw" },
+    { "name": "mingw-reldbg", "configurePreset": "mingw-reldbg" },
     { "name": "mingw-debug", "configurePreset": "mingw-debug" },
     { "name": "msvc", "configurePreset": "msvc", "configuration": "RelWithDebInfo" },
     { "name": "no-vst3", "configurePreset": "no-vst3" }

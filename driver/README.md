@@ -61,7 +61,8 @@ Odinstalowanie: `uninstall-driver.cmd`.
 ## Budowanie
 
 ```
-build.cmd -Configuration Release
+build-driver.cmd            Release
+build-driver.cmd debug      z tracingiem DbgPrintEx
 ```
 
 albo bezpośrednio:
@@ -69,6 +70,9 @@ albo bezpośrednio:
 ```powershell
 .\build.ps1 -Configuration Release
 ```
+
+Nazwa jest `build-driver.cmd`, a nie `build.cmd`, żeby nie myliła się z
+`build.cmd` w katalogu głównym repo, które buduje aplikację.
 
 Wynik: `driver\build\Release\RadioVoiceAudio.sys` + `.inf`.
 

@@ -60,18 +60,17 @@ przy pierwszym `cmake -B`.
 ## Budowanie
 
 ```bash
+build.cmd
+```
+
+Wynik: `build/bin/RadioVoice.exe` (~2,8 MB). Albo przez CMake:
+
+```bash
 cmake --preset mingw
 cmake --build --preset mingw
 ```
 
-Wynik: `build/bin/RadioVoice.exe`.
-
-Warianty:
-
-```bash
-cmake --preset msvc          # Visual Studio zamiast MinGW
-cmake --preset no-vst3       # bez hosta VST3 — usuwa jedyną zależność copyleft
-```
+Warianty: `build.cmd reldbg` (Release + symbole), `debug`, `msvc`, `no-vst3`.
 
 ### ASIO
 

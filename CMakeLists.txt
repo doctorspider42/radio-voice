@@ -121,6 +121,11 @@ else()
     # entry point; static runtime keeps the executable portable.
     target_link_options(RadioVoice PRIVATE
         -municode -static-libgcc -static-libstdc++ -Wl,--gc-sections)
+
+    # A plain Release build is what gets handed to someone else, so the symbol
+    # table goes too. Use the reldbg preset when a stack trace matters more
+    # than the file size.
+    target_link_options(RadioVoice PRIVATE $<$<CONFIG:Release>:-s>)
     target_compile_options(RadioVoice PRIVATE -ffunction-sections -fdata-sections)
 endif()
 
