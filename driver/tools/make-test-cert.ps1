@@ -46,7 +46,8 @@ param(
     [string] $Subject = 'CN=RadioVoice Test Signing',
     [switch] $ExportPfx,
     [securestring] $Password,
-    [string] $OutputDirectory
+    [string] $OutputDirectory,
+    [switch] $IfMissing
 )
 
 $toolsRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
@@ -64,10 +65,38 @@ $cer        = Join-Path $OutputDirectory 'RadioVoiceTest.cer'
 $thumbprint = Join-Path $OutputDirectory 'thumbprint.txt'
 
 #-----------------------------------------------------------------------------
-# 1. Create
+# 0. Reuse
+#
+# -IfMissing asks whether the *key* is reachable, not whether the thumbprint
+# file exists. Those are different questions: a certificate created without
+# elevation lives in the personal store of that account, and an elevated run
+# sees a different one. Treating the file as proof leaves the caller signing
+# with a certificate it cannot open.
 #-----------------------------------------------------------------------------
 
+if ($IfMissing -and (Test-Path $thumbprint)) {
+    $existing = (Get-Content $thumbprint -Raw).Trim()
+    if ((Test-Path "Cert:\LocalMachine\My\$existing") -or
+        (Test-Path "Cert:\CurrentUser\My\$existing")) {
+        Write-Host "Reusing the existing test certificate ($existing)."
+        return
+    }
+    Write-Host "The recorded certificate is not reachable from here; creating a new one."
+}
+
+#-----------------------------------------------------------------------------
+# 1. Create
+#
+# Elevated, the certificate goes into the machine store. install-driver.cmd
+# elevates itself, so a key in CurrentUser\My belongs to a different account
+# than the one that will need it - which is the one case where signing has to
+# work unattended.
+#-----------------------------------------------------------------------------
+
+$storeLocation = if (Test-Elevated) { 'Cert:\LocalMachine\My' } else { 'Cert:\CurrentUser\My' }
+
 Write-Host "Creating a code-signing certificate for '$Subject'..."
+Write-Host "  store: $storeLocation"
 
 # The TextExtension pins the Enhanced Key Usage to Code Signing (OID
 # 1.3.6.1.5.5.7.3.3). Without it the certificate is general-purpose and
@@ -75,7 +104,7 @@ Write-Host "Creating a code-signing certificate for '$Subject'..."
 $certificate = New-SelfSignedCertificate `
     -Type CodeSigningCert `
     -Subject $Subject `
-    -CertStoreLocation 'Cert:\CurrentUser\My' `
+    -CertStoreLocation $storeLocation `
     -KeyExportPolicy Exportable `
     -KeyUsage DigitalSignature `
     -KeyLength 2048 `
@@ -124,10 +153,11 @@ if (Test-Elevated) {
 } else {
     Write-Host ""
     Write-Warning @"
-The certificate was created, but NOT trusted: that needs elevation.
+The certificate was created, but NOT trusted: that needs elevation. It also went
+into your personal store rather than the machine's, so install-driver.cmd - which
+elevates itself, and so runs as a different account - will not find it either.
 
-Signing already works - the key is in your store. Installing the driver will
-not, until Windows trusts the certificate. Run this from an elevated PowerShell:
+Re-running this script elevated fixes both. Or, to trust this one by hand:
 
     Import-Certificate -FilePath "$cer" -CertStoreLocation Cert:\LocalMachine\Root
     Import-Certificate -FilePath "$cer" -CertStoreLocation Cert:\LocalMachine\TrustedPublisher

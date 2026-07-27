@@ -81,15 +81,28 @@ if ($Pfx) {
     }
 
     $thumb = (Get-Content $thumbprintFile -Raw).Trim()
-    if (-not (Test-Path "Cert:\CurrentUser\My\$thumb")) {
+
+    # Which store holds the key decides whether signtool needs /sm, and the
+    # machine store is tried first for a reason: install-driver.cmd elevates
+    # itself, and an elevated process has a different CurrentUser store from the
+    # account that created the certificate. A key in Cert:\CurrentUser\My is
+    # therefore invisible to precisely the run that has to sign unattended.
+    if (Test-Path "Cert:\LocalMachine\My\$thumb") {
+        $signArguments = @('/sm', '/sha1', $thumb)
+        Write-Host "Signing with certificate $thumb from LocalMachine\My"
+    } elseif (Test-Path "Cert:\CurrentUser\My\$thumb") {
+        $signArguments = @('/sha1', $thumb)
+        Write-Host "Signing with certificate $thumb from CurrentUser\My"
+    } else {
         throw @"
-Certificate $thumb is recorded but no longer in Cert:\CurrentUser\My.
-Re-run tools\make-test-cert.ps1.
+Certificate $thumb is recorded but is in neither Cert:\LocalMachine\My nor
+Cert:\CurrentUser\My.
+
+The usual cause is a certificate created without elevation: it lives in the
+personal store of that account, and this run is a different one. Re-run
+tools\make-test-cert.ps1 from an elevated prompt to put it in the machine store.
 "@
     }
-
-    $signArguments = @('/sha1', $thumb)
-    Write-Host "Signing with certificate $thumb from the store"
 }
 
 $inf2cat  = Find-KitTool 'Inf2Cat.exe'

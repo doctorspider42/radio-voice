@@ -94,13 +94,9 @@ if %errorlevel% neq 0 goto :fail
 :: leave the first trusted for no reason.
 ::-----------------------------------------------------------------------------
 echo.
-if exist "%DRIVER%\build\cert\thumbprint.txt" (
-    echo [3/4] Reusing the existing test certificate.
-) else (
-    echo [3/4] Creating a test certificate...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\tools\make-test-cert.ps1"
-    if !errorlevel! neq 0 goto :fail
-)
+echo [3/4] Test certificate...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\tools\make-test-cert.ps1" -IfMissing
+if %errorlevel% neq 0 goto :fail
 
 echo.
 echo       Signing...
