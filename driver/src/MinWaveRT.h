@@ -34,8 +34,9 @@ public:
 
     RV_DIRECTION Direction() const { return m_direction; }
 
-    /// Called by a stream as it is created and destroyed, so the miniport can
-    /// enforce the single-stream-per-pin rule the descriptors declare.
+    /// Called by a stream as it is created and destroyed. Only the render side
+    /// acts on this - it is how the exclusive-writer rule is enforced. On the
+    /// capture side it simply records the most recent stream.
     void StreamCreated(MiniportWaveRTStream* stream);
     void StreamDestroyed(MiniportWaveRTStream* stream);
 

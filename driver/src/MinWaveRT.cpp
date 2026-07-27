@@ -124,11 +124,13 @@ MiniportWaveRT::NewStream(_Out_ PMINIPORTWAVERTSTREAM* Stream,
     if (!Stream || !PortStream || !DataFormat)
         return STATUS_INVALID_PARAMETER;
 
-    // The pin descriptors declare a maximum of one instance, so PortCls should
-    // never ask for a second. Refusing here as well keeps the invariant local
-    // to the code that depends on it.
-    if (m_stream) {
-        RV_LOG("second stream refused on an already-open pin");
+    // Only the render side is exclusive, matching what its pin descriptor
+    // declares: two writers would interleave two programmes into one ring.
+    // Capture is not - several applications opening the same microphone at once
+    // is ordinary, and its descriptor allows it, so refusing here would
+    // contradict the descriptor and fail the second application for no reason.
+    if (m_direction == RvDirectionRender && m_stream) {
+        RV_LOG("second render stream refused; the cable already has a writer");
         return STATUS_DEVICE_BUSY;
     }
 
