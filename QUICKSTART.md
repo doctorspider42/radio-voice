@@ -88,18 +88,14 @@ build.cmd no-vst3    bez hosta wtyczek — usuwa jedyną zależność copyleft
 
 ### ASIO
 
-Sterowniki ASIO są wykrywane zawsze, ale bez SDK Steinberga wiszą na liście
-wyszarzone. SDK jest nieredystrybuowalne, więc nie ma go w repo i CMake nie
-pobiera go automatycznie tak jak reszty zależności.
+Nie wymaga niczego — SDK jest w repo (dziewięć plików, 80 KB), więc `build.cmd`
+od razu buduje z obsługą ASIO. Podstawa prawna: [NOTICE.md](NOTICE.md).
+
+Aktualizacja SDK do nowszego wydania, gdyby kiedyś była potrzebna:
 
 ```
-tools\fetch-asio-sdk.cmd
-build.cmd
+tools\fetch-asio-sdk.cmd -Force
 ```
-
-Pierwsze polecenie ściąga SDK do `third_party\asiosdk` — **uruchomienie go
-oznacza akceptację licencji ASIO SDK Steinberga**, której kopia ląduje obok
-źródeł. Potem CMake znajduje SDK sam, bez żadnych flag.
 
 ### Pierwsze uruchomienie
 

@@ -1,9 +1,10 @@
 build/
 out/
 
-# The ASIO SDK is downloaded here, never committed: Steinberg's licence forbids
-# redistributing it. tools/fetch-asio-sdk.cmd puts it in place.
-third_party/
+# third_party/asiosdk IS committed - see NOTICE.md. Anything else that lands
+# under third_party/ is a working copy of something fetched, and is not.
+third_party/*
+!third_party/asiosdk/
 .vs/
 .vscode/
 .idea/

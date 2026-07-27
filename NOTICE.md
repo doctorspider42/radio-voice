@@ -19,10 +19,10 @@ other dependencies below stand in the way.
 | [Dear ImGui](https://github.com/ocornut/imgui) | MIT | no | fetched at configure time |
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT | no | single header, downloaded at configure time |
 | [VST3 SDK](https://github.com/steinbergmedia/vst3sdk) | GPLv3 **or** proprietary Steinberg licence | **yes** (under GPLv3) | fetched at configure time, only when `RV_ENABLE_VST3=ON` |
-| [ASIO SDK](https://www.steinberg.net/developers/) | Steinberg ASIO SDK Licensing Agreement | no, but **not redistributable** | must be downloaded manually |
+| [ASIO SDK](https://www.steinberg.net/developers/) (host subset) | GPLv3 **or** proprietary Steinberg licence; the `host/` helpers are BSD-3-Clause | **yes** (under GPLv3) | vendored in `third_party/asiosdk` |
 
-Nothing is vendored into this repository. Every dependency is fetched by CMake
-at configure time, so the licence position of a checkout is unambiguous.
+Only the ASIO SDK is vendored, and only a nine-file subset of it. Everything
+else is fetched by CMake at configure time.
 
 ### VST3 SDK
 
@@ -37,17 +37,39 @@ unavailable. In that configuration nothing copyleft remains.
 
 ### ASIO SDK
 
-The ASIO SDK cannot be redistributed, so it is neither committed here nor
-fetched by CMake alongside the other dependencies. `tools/fetch-asio-sdk.cmd`
-downloads it into `third_party/asiosdk`, which is git-ignored; running that
-script accepts Steinberg's ASIO SDK Licensing Agreement, and a copy of the
-agreement is placed next to the sources.
+As of **SDK 2.3.4** the ASIO SDK is dual licensed: the proprietary Steinberg
+ASIO License, **or** GPLv3. Earlier releases were proprietary-only and could not
+be redistributed at all, which is where the widespread "you must download the
+ASIO SDK yourself" advice comes from - it is no longer true.
 
-CMake picks the SDK up from there automatically. A build without it simply has
-no ASIO backend.
+This project takes the GPLv3 option, which it is already under because of the
+VST3 SDK, so the sources are vendored in `third_party/asiosdk` and the build
+needs no download step.
 
-Note that distributing a binary built against the ASIO SDK carries obligations
-under that agreement - read it before shipping one.
+What is vendored is deliberately a subset - the nine files a *host* needs:
+
+| Path | Licence |
+|---|---|
+| `common/asio.h`, `asio.cpp`, `asiosys.h`, `iasiodrv.h` | Steinberg **or** GPLv3 |
+| `host/asiodrivers.{h,cpp}`, `ginclude.h` | BSD-3-Clause |
+| `host/pc/asiolist.{h,cpp}` | BSD-3-Clause |
+
+Left out on purpose:
+
+- the driver-side sources (`common/combase.*`, `dllentry.cpp`, `wxdebug.h`),
+  which carry a 1990s Microsoft copyright with no clear grant, and which a host
+  never compiles;
+- the **ASIO logo artwork** and the usage-guideline PDFs. Those are trademark
+  material, and trademark is not touched by either licence option. The name is
+  used here only to say what the software is compatible with.
+
+**ASIO is a trademark and software of Steinberg Media Technologies GmbH.**
+
+If you intend to ship a binary under the *proprietary* option instead, you need
+a License Agreement signed by Steinberg - see `third_party/asiosdk/LICENSE.txt`.
+
+`tools/fetch-asio-sdk.cmd` re-downloads the full SDK, for updating to a newer
+release; it is not needed for an ordinary build.
 
 ASIO is a trademark and software of Steinberg Media Technologies GmbH.
 

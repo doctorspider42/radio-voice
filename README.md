@@ -75,18 +75,12 @@ cmake --preset no-vst3       # bez hosta VST3 — usuwa jedyną zależność cop
 
 ### ASIO
 
-SDK Steinberga nie może być redystrybuowane, więc nie ma go w repo i CMake nie
-pobiera go razem z resztą zależności:
+Działa od razu, bez dodatkowych kroków. Od wersji 2.3.4 SDK ASIO jest
+dwulicencyjne — Steinberg **albo** GPLv3 — więc dziewięcioplikowy podzbiór
+potrzebny hostowi leży w `third_party/asiosdk` na warunkach GPLv3, pod którym
+projekt i tak już jest. Szczegóły i co świadomie pominięto: [NOTICE.md](NOTICE.md).
 
-```bash
-tools\fetch-asio-sdk.cmd
-```
-
-Ląduje w `third_party/asiosdk`, po czym CMake wykrywa je sam — bez flag.
-Uruchomienie skryptu oznacza akceptację licencji ASIO SDK Steinberga.
-
-Bez SDK lista urządzeń i tak pokazuje zainstalowane sterowniki ASIO —
-wyszarzone, z wyjaśnieniem, czego brakuje — zamiast udawać, że ich nie ma.
+`tools\fetch-asio-sdk.cmd` służy tylko do aktualizacji SDK do nowszego wydania.
 
 ---
 
