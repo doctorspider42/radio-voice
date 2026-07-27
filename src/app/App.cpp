@@ -65,10 +65,16 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, Config loaded)
     // A first run has no device selection; default to the system's own
     // choices, and point the output at a virtual cable if one is installed,
     // since that is the entire purpose of the application.
+    //
+    // The backend is assigned along with the id, never left as it was. A device
+    // id is only meaningful to the backend that produced it - a WASAPI endpoint
+    // id handed to the ASIO backend is read as a driver name, and the failure
+    // that follows names a GUID that appears nowhere the user can act on.
     if (config_.input.deviceId.empty()) {
         const auto inputs = devices_.inputs(BackendType::Wasapi);
         for (const auto& device : inputs) {
             if (device.isDefault) {
+                config_.input.backend    = BackendType::Wasapi;
                 config_.input.deviceId   = device.id;
                 config_.input.deviceName = device.name;
                 break;
@@ -84,12 +90,16 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, Config loaded)
             cables.begin(), cables.end(),
             [](const audio::DeviceInfo& d) { return icontains(d.name, "cable input"); });
 
-        if (preferred != cables.end()) {
-            config_.output.deviceId   = preferred->id;
-            config_.output.deviceName = preferred->name;
-        } else if (!cables.empty()) {
-            config_.output.deviceId   = cables.front().id;
-            config_.output.deviceName = cables.front().name;
+        const audio::DeviceInfo* chosen = nullptr;
+        if (preferred != cables.end())
+            chosen = &(*preferred);
+        else if (!cables.empty())
+            chosen = &cables.front();
+
+        if (chosen) {
+            config_.output.backend    = chosen->backend;
+            config_.output.deviceId   = chosen->id;
+            config_.output.deviceName = chosen->name;
         }
     }
 
@@ -179,12 +189,46 @@ void App::startEngine()
 {
     startupError_.clear();
 
-    if (config_.input.deviceId.empty()) {
-        startupError_ = "no input device selected";
+    // Catch a device that does not belong to its backend before the backend
+    // gets a chance to fail on it. Opening a WASAPI endpoint id as an ASIO
+    // driver name produces an error naming a GUID, which tells the user
+    // nothing they can act on.
+    auto checkSelection = [&](const DeviceConfig& device, bool isInput) -> std::string {
+        const char* side = isInput ? "input" : "output";
+
+        if (device.deviceId.empty())
+            return std::string("no ") + side + " device selected";
+
+        const auto list = isInput ? devices_.inputs(device.backend)
+                                  : devices_.outputs(device.backend);
+        if (list.empty()) {
+            return std::string("no ") + toString(device.backend) + " " + side +
+                   " devices are available on this system";
+        }
+
+        const bool present = std::any_of(
+            list.begin(), list.end(),
+            [&](const audio::DeviceInfo& info) { return info.id == device.deviceId; });
+
+        if (!present) {
+            // Phrased without an article before the backend name, so it reads
+            // correctly for "WASAPI", "DirectSound" and "ASIO" alike.
+            return std::string(side) + " device \"" +
+                   (device.deviceName.empty() ? device.deviceId : device.deviceName) +
+                   "\" is not available under " + toString(device.backend) +
+                   " - it may be unplugged, or the backend may have been changed "
+                   "without picking a new device";
+        }
+
+        return {};
+    };
+
+    if (auto problem = checkSelection(config_.input, true); !problem.empty()) {
+        startupError_ = problem;
         return;
     }
-    if (config_.output.deviceId.empty()) {
-        startupError_ = "no output device selected";
+    if (auto problem = checkSelection(config_.output, false); !problem.empty()) {
+        startupError_ = problem;
         return;
     }
 
@@ -511,6 +555,14 @@ void App::renderTopBar()
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
         ImGui::TextWrapped("%s", startupError_.c_str());
         ImGui::PopStyleColor();
+
+        // The error message is the thing most worth pasting somewhere, and
+        // ImGui text cannot be selected with the mouse.
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("click to copy");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                ImGui::SetClipboardText(startupError_.c_str());
+        }
     }
 
     if (running && meters_.inputStarved.load()) {
@@ -567,10 +619,43 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
     if (ImGui::BeginCombo("##backend", backendName(device.backend))) {
         for (BackendType backend : backends) {
             const bool selected = backend == device.backend;
-            if (ImGui::Selectable(backendName(backend), selected)) {
+            if (ImGui::Selectable(backendName(backend), selected) && !selected) {
                 device.backend = backend;
-                device.deviceId.clear();
-                device.deviceName.clear();
+
+                // Pick a device for the new backend straight away rather than
+                // leaving the selection empty. An empty selection is a dead end:
+                // the restart prompt appears, restarting fails, and the reason
+                // is a second step the user has not been told about yet.
+                const auto list = isInput ? devices_.inputs(backend)
+                                          : devices_.outputs(backend);
+
+                const auto preferred = std::find_if(
+                    list.begin(), list.end(),
+                    [](const audio::DeviceInfo& info) {
+                        return info.isDefault && info.usable();
+                    });
+
+                const audio::DeviceInfo* chosen = nullptr;
+                if (preferred != list.end()) {
+                    chosen = &(*preferred);
+                } else {
+                    const auto usable = std::find_if(
+                        list.begin(), list.end(),
+                        [](const audio::DeviceInfo& info) { return info.usable(); });
+                    if (usable != list.end())
+                        chosen = &(*usable);
+                }
+
+                if (chosen) {
+                    device.deviceId   = chosen->id;
+                    device.deviceName = chosen->name;
+                    if (chosen->defaultSampleRate > 0)
+                        device.sampleRate = chosen->defaultSampleRate;
+                } else {
+                    device.deviceId.clear();
+                    device.deviceName.clear();
+                }
+
                 markDirty();
             }
         }
@@ -1376,11 +1461,51 @@ void App::renderLogWindow()
         return;
     }
 
+    const auto entries = log::snapshot();
+
+    // Formatting one line, shared by what is drawn and what is copied, so the
+    // text on the clipboard is the text that was on screen.
+    auto formatLine = [](const log::Entry& entry) {
+        char prefix[32];
+        std::snprintf(prefix, sizeof(prefix), "[%8.3f] ", entry.timeSeconds);
+        return std::string(prefix) + entry.text;
+    };
+
+    if (ImGui::Button("Copy all")) {
+        std::string all;
+        all.reserve(entries.size() * 80);
+        for (const auto& entry : entries) {
+            all += formatLine(entry);
+            all += '\n';
+        }
+        ImGui::SetClipboardText(all.c_str());
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Copy problems")) {
+        std::string problems;
+        for (const auto& entry : entries) {
+            if (entry.level >= log::Level::Warning) {
+                problems += formatLine(entry);
+                problems += '\n';
+            }
+        }
+        ImGui::SetClipboardText(problems.empty() ? "(no warnings or errors)"
+                                                 : problems.c_str());
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("click a line to copy it");
+
+    ImGui::Separator();
+
     ImGui::PushFont(fonts_.small, 0.0f);
     ImGui::BeginChild("##entries", ImVec2(0, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar);
 
-    for (const auto& entry : log::snapshot()) {
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const auto& entry = entries[i];
+
         ImU32 colour = theme::kTextDim;
         switch (entry.level) {
             case log::Level::Debug:   colour = theme::kTextFaint; break;
@@ -1389,9 +1514,17 @@ void App::renderLogWindow()
             case log::Level::Error:   colour = theme::kDanger;    break;
         }
 
+        const std::string line = formatLine(entry);
+
+        // A Selectable rather than plain text: ImGui text is not selectable, so
+        // without this the one thing anyone wants from a log - pasting it
+        // somewhere - is impossible.
+        ImGui::PushID(static_cast<int>(i));
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(colour));
-        ImGui::Text("[%8.3f] %s", entry.timeSeconds, entry.text.c_str());
+        if (ImGui::Selectable(line.c_str()))
+            ImGui::SetClipboardText(entry.text.c_str());
         ImGui::PopStyleColor();
+        ImGui::PopID();
     }
 
     // Follow the tail unless the user has scrolled up to read something.
