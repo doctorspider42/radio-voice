@@ -1,0 +1,25 @@
+build/
+out/
+.vs/
+.vscode/
+.idea/
+
+# WDK / MSBuild output for the driver
+driver/x64/
+driver/Debug/
+driver/Release/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.sys
+*.cat
+*.user
+*.aps
+
+# Local signing material - never commit a private key
+*.pfx
+*.pvk
+*.cer
+*.p7b

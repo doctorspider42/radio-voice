@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "mingw",
+      "displayName": "MinGW-w64 (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "mingw-debug",
+      "inherits": "mingw",
+      "displayName": "MinGW-w64 (Debug)",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "msvc",
+      "displayName": "Visual Studio (x64)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-msvc"
+    },
+    {
+      "name": "no-vst3",
+      "inherits": "mingw",
+      "displayName": "MinGW-w64, VST3 host disabled (no copyleft dependency)",
+      "binaryDir": "${sourceDir}/build-novst3",
+      "cacheVariables": { "RV_ENABLE_VST3": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mingw", "configurePreset": "mingw" },
+    { "name": "mingw-debug", "configurePreset": "mingw-debug" },
+    { "name": "msvc", "configurePreset": "msvc", "configuration": "RelWithDebInfo" },
+    { "name": "no-vst3", "configurePreset": "no-vst3" }
+  ]
+}

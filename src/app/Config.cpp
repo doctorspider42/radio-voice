@@ -1,0 +1,287 @@
+#include "app/Config.h"
+
+#include <fstream>
+
+#include <json.hpp>
+
+#include "core/Log.h"
+#include "core/Paths.h"
+
+using nlohmann::json;
+
+namespace rv::app {
+namespace {
+
+constexpr int kConfigVersion = 1;
+
+void readDevice(const json& node, DeviceConfig& device)
+{
+    device.backend      = static_cast<BackendType>(node.value("backend", 0));
+    device.wasapiMode   = static_cast<WasapiMode>(node.value("wasapiMode", 0));
+    device.deviceId     = node.value("deviceId", "");
+    device.deviceName   = node.value("deviceName", "");
+    device.sampleRate   = node.value("sampleRate", 48000);
+    device.channels     = node.value("channels", 2);
+    device.bufferFrames = node.value("bufferFrames", 0);
+}
+
+json writeDevice(const DeviceConfig& device)
+{
+    return json{{"backend", static_cast<int>(device.backend)},
+                {"wasapiMode", static_cast<int>(device.wasapiMode)},
+                {"deviceId", device.deviceId},
+                {"deviceName", device.deviceName},
+                {"sampleRate", device.sampleRate},
+                {"channels", device.channels},
+                {"bufferFrames", device.bufferFrames}};
+}
+
+} // namespace
+
+Config Config::load()
+{
+    Config config;
+
+    // Defaults that cannot be expressed as member initialisers.
+    for (int i = 0; i < kEqBands; ++i) {
+        config.params.eqGainDb[i] = 0.0f;
+        config.params.eqQ[i]      = 1.0f;
+    }
+
+    std::ifstream file(paths::configFile());
+    if (!file) {
+        RV_INFO("no configuration file yet; starting from defaults");
+        return config;
+    }
+
+    json root;
+    try {
+        file >> root;
+    } catch (const std::exception& e) {
+        RV_WARN("configuration file is unreadable (%s); starting from defaults", e.what());
+        return config;
+    }
+
+    if (root.value("version", 0) != kConfigVersion) {
+        RV_WARN("configuration file is from a different version; starting from defaults");
+        return config;
+    }
+
+    if (root.contains("input"))
+        readDevice(root["input"], config.input);
+    if (root.contains("output"))
+        readDevice(root["output"], config.output);
+
+    config.internalChannels = root.value("internalChannels", config.internalChannels);
+    config.maxBlockFrames   = root.value("maxBlockFrames", config.maxBlockFrames);
+    config.autoStart        = root.value("autoStart", config.autoStart);
+    config.windowWidth      = root.value("windowWidth", config.windowWidth);
+    config.windowHeight     = root.value("windowHeight", config.windowHeight);
+
+    if (root.contains("params")) {
+        const json& p = root["params"];
+        auto& v = config.params;
+
+        v.inputGainDb  = p.value("inputGainDb", v.inputGainDb);
+        v.outputGainDb = p.value("outputGainDb", v.outputGainDb);
+        v.mute         = p.value("mute", v.mute);
+        v.bypassAll    = p.value("bypassAll", v.bypassAll);
+
+        v.hpfEnabled = p.value("hpfEnabled", v.hpfEnabled);
+        v.hpfHz      = p.value("hpfHz", v.hpfHz);
+        v.lpfEnabled = p.value("lpfEnabled", v.lpfEnabled);
+        v.lpfHz      = p.value("lpfHz", v.lpfHz);
+
+        v.eqEnabled = p.value("eqEnabled", v.eqEnabled);
+        if (p.contains("eqGainDb") && p["eqGainDb"].is_array()) {
+            const auto& array = p["eqGainDb"];
+            for (int i = 0; i < kEqBands && i < static_cast<int>(array.size()); ++i)
+                v.eqGainDb[i] = array[static_cast<size_t>(i)].get<float>();
+        }
+        if (p.contains("eqQ") && p["eqQ"].is_array()) {
+            const auto& array = p["eqQ"];
+            for (int i = 0; i < kEqBands && i < static_cast<int>(array.size()); ++i)
+                v.eqQ[i] = array[static_cast<size_t>(i)].get<float>();
+        }
+
+        v.gateEnabled        = p.value("gateEnabled", v.gateEnabled);
+        v.gateThresholdDb    = p.value("gateThresholdDb", v.gateThresholdDb);
+        v.gateHysteresisDb   = p.value("gateHysteresisDb", v.gateHysteresisDb);
+        v.gateRangeDb        = p.value("gateRangeDb", v.gateRangeDb);
+        v.gateAttackMs       = p.value("gateAttackMs", v.gateAttackMs);
+        v.gateHoldMs         = p.value("gateHoldMs", v.gateHoldMs);
+        v.gateReleaseMs      = p.value("gateReleaseMs", v.gateReleaseMs);
+        v.gateLookaheadMs    = p.value("gateLookaheadMs", v.gateLookaheadMs);
+        v.gateSidechainHpfHz = p.value("gateSidechainHpfHz", v.gateSidechainHpfHz);
+
+        v.limiterEnabled   = p.value("limiterEnabled", v.limiterEnabled);
+        v.limiterCeilingDb = p.value("limiterCeilingDb", v.limiterCeilingDb);
+        v.limiterReleaseMs = p.value("limiterReleaseMs", v.limiterReleaseMs);
+    }
+
+    for (const auto& entry : root.value("chain", json::array())) {
+        ChainEntryConfig node;
+        node.kind        = entry.value("kind", "");
+        node.bypassed    = entry.value("bypassed", false);
+        node.pluginPath  = entry.value("pluginPath", "");
+        node.pluginUid   = entry.value("pluginUid", "");
+        node.pluginName  = entry.value("pluginName", "");
+        node.pluginState = entry.value("pluginState", "");
+        if (!node.kind.empty())
+            config.chain.push_back(std::move(node));
+    }
+
+    return config;
+}
+
+void Config::save() const
+{
+    json root;
+    root["version"] = kConfigVersion;
+    root["input"]   = writeDevice(input);
+    root["output"]  = writeDevice(output);
+
+    root["internalChannels"] = internalChannels;
+    root["maxBlockFrames"]   = maxBlockFrames;
+    root["autoStart"]        = autoStart;
+    root["windowWidth"]      = windowWidth;
+    root["windowHeight"]     = windowHeight;
+
+    json p;
+    p["inputGainDb"]  = params.inputGainDb;
+    p["outputGainDb"] = params.outputGainDb;
+    p["mute"]         = params.mute;
+    p["bypassAll"]    = params.bypassAll;
+    p["hpfEnabled"]   = params.hpfEnabled;
+    p["hpfHz"]        = params.hpfHz;
+    p["lpfEnabled"]   = params.lpfEnabled;
+    p["lpfHz"]        = params.lpfHz;
+    p["eqEnabled"]    = params.eqEnabled;
+    p["eqGainDb"]     = std::vector<float>(std::begin(params.eqGainDb), std::end(params.eqGainDb));
+    p["eqQ"]          = std::vector<float>(std::begin(params.eqQ), std::end(params.eqQ));
+    p["gateEnabled"]        = params.gateEnabled;
+    p["gateThresholdDb"]    = params.gateThresholdDb;
+    p["gateHysteresisDb"]   = params.gateHysteresisDb;
+    p["gateRangeDb"]        = params.gateRangeDb;
+    p["gateAttackMs"]       = params.gateAttackMs;
+    p["gateHoldMs"]         = params.gateHoldMs;
+    p["gateReleaseMs"]      = params.gateReleaseMs;
+    p["gateLookaheadMs"]    = params.gateLookaheadMs;
+    p["gateSidechainHpfHz"] = params.gateSidechainHpfHz;
+    p["limiterEnabled"]     = params.limiterEnabled;
+    p["limiterCeilingDb"]   = params.limiterCeilingDb;
+    p["limiterReleaseMs"]   = params.limiterReleaseMs;
+    root["params"] = std::move(p);
+
+    json chainJson = json::array();
+    for (const auto& node : chain) {
+        chainJson.push_back({{"kind", node.kind},
+                             {"bypassed", node.bypassed},
+                             {"pluginPath", node.pluginPath},
+                             {"pluginUid", node.pluginUid},
+                             {"pluginName", node.pluginName},
+                             {"pluginState", node.pluginState}});
+    }
+    root["chain"] = std::move(chainJson);
+
+    std::ofstream file(paths::configFile(), std::ios::trunc);
+    if (!file) {
+        RV_ERROR("could not write the configuration file");
+        return;
+    }
+    file << root.dump(2);
+}
+
+void Config::applyTo(Params& target) const
+{
+    target.inputGainDb.store(params.inputGainDb);
+    target.outputGainDb.store(params.outputGainDb);
+    target.mute.store(params.mute);
+    target.bypassAll.store(params.bypassAll);
+
+    target.hpfEnabled.store(params.hpfEnabled);
+    target.hpfHz.store(params.hpfHz);
+    target.lpfEnabled.store(params.lpfEnabled);
+    target.lpfHz.store(params.lpfHz);
+
+    target.eqEnabled.store(params.eqEnabled);
+    for (int i = 0; i < kEqBands; ++i) {
+        target.eqGainDb[i].store(params.eqGainDb[i]);
+        target.eqQ[i].store(params.eqQ[i]);
+    }
+
+    target.gateEnabled.store(params.gateEnabled);
+    target.gateThresholdDb.store(params.gateThresholdDb);
+    target.gateHysteresisDb.store(params.gateHysteresisDb);
+    target.gateRangeDb.store(params.gateRangeDb);
+    target.gateAttackMs.store(params.gateAttackMs);
+    target.gateHoldMs.store(params.gateHoldMs);
+    target.gateReleaseMs.store(params.gateReleaseMs);
+    target.gateLookaheadMs.store(params.gateLookaheadMs);
+    target.gateSidechainHpfHz.store(params.gateSidechainHpfHz);
+
+    target.limiterEnabled.store(params.limiterEnabled);
+    target.limiterCeilingDb.store(params.limiterCeilingDb);
+    target.limiterReleaseMs.store(params.limiterReleaseMs);
+
+    target.touch();
+}
+
+void Config::captureFrom(const Params& source)
+{
+    params.inputGainDb  = source.inputGainDb.load();
+    params.outputGainDb = source.outputGainDb.load();
+    params.mute         = source.mute.load();
+    params.bypassAll    = source.bypassAll.load();
+
+    params.hpfEnabled = source.hpfEnabled.load();
+    params.hpfHz      = source.hpfHz.load();
+    params.lpfEnabled = source.lpfEnabled.load();
+    params.lpfHz      = source.lpfHz.load();
+
+    params.eqEnabled = source.eqEnabled.load();
+    for (int i = 0; i < kEqBands; ++i) {
+        params.eqGainDb[i] = source.eqGainDb[i].load();
+        params.eqQ[i]      = source.eqQ[i].load();
+    }
+
+    params.gateEnabled        = source.gateEnabled.load();
+    params.gateThresholdDb    = source.gateThresholdDb.load();
+    params.gateHysteresisDb   = source.gateHysteresisDb.load();
+    params.gateRangeDb        = source.gateRangeDb.load();
+    params.gateAttackMs       = source.gateAttackMs.load();
+    params.gateHoldMs         = source.gateHoldMs.load();
+    params.gateReleaseMs      = source.gateReleaseMs.load();
+    params.gateLookaheadMs    = source.gateLookaheadMs.load();
+    params.gateSidechainHpfHz = source.gateSidechainHpfHz.load();
+
+    params.limiterEnabled   = source.limiterEnabled.load();
+    params.limiterCeilingDb = source.limiterCeilingDb.load();
+    params.limiterReleaseMs = source.limiterReleaseMs.load();
+}
+
+audio::EngineConfig Config::toEngineConfig() const
+{
+    audio::EngineConfig engine;
+
+    engine.input.deviceId     = input.deviceId;
+    engine.input.backend      = input.backend;
+    engine.input.wasapiMode   = input.wasapiMode;
+    engine.input.sampleRate   = input.sampleRate;
+    engine.input.channels     = input.channels;
+    engine.input.bufferFrames = input.bufferFrames;
+
+    engine.output.deviceId     = output.deviceId;
+    engine.output.backend      = output.backend;
+    engine.output.wasapiMode   = output.wasapiMode;
+    engine.output.sampleRate   = output.sampleRate;
+    engine.output.channels     = output.channels;
+    engine.output.bufferFrames = output.bufferFrames;
+
+    engine.internalChannels = internalChannels;
+    engine.maxBlockFrames   = maxBlockFrames;
+
+    return engine;
+}
+
+} // namespace rv::app
