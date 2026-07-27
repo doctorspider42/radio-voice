@@ -194,7 +194,7 @@ void App::startEngine()
     // gets a chance to fail on it. Opening a WASAPI endpoint id as an ASIO
     // driver name produces an error naming a GUID, which tells the user
     // nothing they can act on.
-    auto checkSelection = [&](const DeviceConfig& device, bool isInput) -> std::string {
+    auto checkSelection = [&](DeviceConfig& device, bool isInput) -> std::string {
         const char* side = isInput ? "input" : "output";
 
         if (device.deviceId.empty())
@@ -211,17 +211,54 @@ void App::startEngine()
             list.begin(), list.end(),
             [&](const audio::DeviceInfo& info) { return info.id == device.deviceId; });
 
-        if (!present) {
-            // Phrased without an article before the backend name, so it reads
-            // correctly for "WASAPI", "DirectSound" and "ASIO" alike.
-            return std::string(side) + " device \"" +
-                   (device.deviceName.empty() ? device.deviceId : device.deviceName) +
-                   "\" is not available under " + toString(device.backend) +
-                   " - it may be unplugged, or the backend may have been changed "
-                   "without picking a new device";
+        if (present)
+            return {};
+
+        // The identifier is gone but the device may not be. Reinstalling a
+        // driver, or replugging an interface, destroys and recreates the
+        // endpoint: same hardware, same name, new identifier. Refusing to start
+        // then asks the user to re-pick a device from a list in which it is
+        // already sitting, unchanged, right where they left it.
+        //
+        // Only an unambiguous match is adopted. Two devices sharing a name is
+        // ordinary - two identical interfaces, or one card exposing several
+        // ports - and silently guessing between them would route audio
+        // somewhere the user did not choose, which is worse than an error.
+        if (!device.deviceName.empty()) {
+            const audio::DeviceInfo* match = nullptr;
+            int matches = 0;
+
+            for (const auto& info : list) {
+                if (info.name == device.deviceName && info.usable()) {
+                    match = &info;
+                    ++matches;
+                }
+            }
+
+            if (matches == 1) {
+                RV_INFO("%s device \"%s\" reappeared with a new id under %s; "
+                        "rebinding to it", side, device.deviceName.c_str(),
+                        toString(device.backend));
+                device.deviceId = match->id;
+                markDirty();
+                return {};
+            }
+
+            if (matches > 1) {
+                return std::string(side) + " device \"" + device.deviceName +
+                       "\" is no longer at the identifier it was saved under, and "
+                       "more than one device now carries that name - pick the one "
+                       "you want from the list";
+            }
         }
 
-        return {};
+        // Phrased without an article before the backend name, so it reads
+        // correctly for "WASAPI", "DirectSound" and "ASIO" alike.
+        return std::string(side) + " device \"" +
+               (device.deviceName.empty() ? device.deviceId : device.deviceName) +
+               "\" is not available under " + toString(device.backend) +
+               " - it may be unplugged, or the backend may have been changed "
+               "without picking a new device";
     };
 
     if (auto problem = checkSelection(config_.input, true); !problem.empty()) {
