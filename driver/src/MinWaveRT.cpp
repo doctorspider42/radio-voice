@@ -449,12 +449,20 @@ NTSTATUS MiniportWaveRTStream::AllocateBuffer(ULONG requestedSize,
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    // The period is what the declared format says the buffer's worth of audio
-    // takes to play, divided by the number of notifications the OS asked for.
-    const ULONG bytesPerPeriod = size / periods;
-    m_period100ns = (LONGLONG)bytesPerPeriod * 10000000LL / m_wireBytesPerSecond;
-    if (m_period100ns <= 0)
-        m_period100ns = (LONGLONG)RV_DEFAULT_PERIOD_MS * 10000LL;
+    // How far the position advances between the wake-ups the OS asked for.
+    m_notifyPeriodBytes = notificationCount ? (size / notificationCount) : 0;
+
+    // The tick is fixed and short, because it is the resolution of the reported
+    // position rather than a buffering decision - see RV_TICK_MS. The only
+    // reason to go shorter is a notification period shorter still, which would
+    // otherwise be delivered late.
+    m_period100ns = (LONGLONG)RV_TICK_MS * 10000LL;
+    if (m_notifyPeriodBytes) {
+        const LONGLONG notifyPeriod =
+            (LONGLONG)m_notifyPeriodBytes * 10000000LL / m_wireBytesPerSecond;
+        if (notifyPeriod > 0 && notifyPeriod < m_period100ns)
+            m_period100ns = notifyPeriod;
+    }
 
     *mdl                 = m_mdl;
     *actualSize          = size;
@@ -464,8 +472,10 @@ NTSTATUS MiniportWaveRTStream::AllocateBuffer(ULONG requestedSize,
     rvdiag::Record(m_capture ? L"CaptureBufferBytes" : L"RenderBufferBytes", size);
     rvdiag::Record(m_capture ? L"CaptureNotifyCount" : L"RenderNotifyCount",
                    notificationCount);
-    rvdiag::Record(m_capture ? L"CapturePeriod100ns" : L"RenderPeriod100ns",
+    rvdiag::Record(m_capture ? L"CaptureTick100ns" : L"RenderTick100ns",
                    static_cast<ULONG>(m_period100ns));
+    rvdiag::Record(m_capture ? L"CaptureNotifyBytes" : L"RenderNotifyBytes",
+                   m_notifyPeriodBytes);
 
     RV_LOG("buffer allocated: %lu bytes, %lu notifications, period %lld00ns",
            size, notificationCount, m_period100ns);
@@ -489,8 +499,10 @@ void MiniportWaveRTStream::ReleaseBuffer()
         ExFreePool(m_scratch);
         m_scratch = nullptr;
     }
-    m_bufferSize  = 0;
-    m_scratchSize = 0;
+    m_bufferSize        = 0;
+    m_scratchSize       = 0;
+    m_notifyPeriodBytes = 0;
+    m_lastNotifyIndex   = 0;
 }
 
 STDMETHODIMP_(NTSTATUS)
@@ -710,9 +722,21 @@ void MiniportWaveRTStream::OnTick()
     m_position      = target - (target % m_wireFrameBytes);
     m_lastTime100ns = now;
 
+    // The timer now ticks far faster than the OS wants to be woken, so the
+    // wake-up is driven by the position crossing a notification boundary rather
+    // than by the callback running. Signalling on every tick would wake the
+    // audio engine several times per period for no reason.
+    BOOLEAN notify = TRUE;
+    if (m_notifyPeriodBytes) {
+        const ULONGLONG index = m_position / m_notifyPeriodBytes;
+        notify = (index != m_lastNotifyIndex);
+        m_lastNotifyIndex = index;
+    }
+
     KeReleaseInStackQueuedSpinLock(&handle);
 
-    SignalNotifications();
+    if (notify)
+        SignalNotifications();
 }
 
 #pragma code_seg("PAGE")
@@ -731,9 +755,10 @@ NTSTATUS MiniportWaveRTStream::StartTimer()
     if (!m_timer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    m_startTime100ns = KeQueryInterruptTime();
-    m_lastTime100ns  = m_startTime100ns;
-    m_position       = 0;
+    m_startTime100ns  = KeQueryInterruptTime();
+    m_lastTime100ns   = m_startTime100ns;
+    m_position        = 0;
+    m_lastNotifyIndex = 0;
 
     // Negative due time means relative; the period repeats it.
     ExSetTimer(m_timer, -m_period100ns, m_period100ns, nullptr);

@@ -133,7 +133,20 @@ private:
     // Timing.
     PEX_TIMER m_timer          = nullptr;
     ULONG     m_notifyCount    = 0;
+
+    /// Interval between timer callbacks. Fixed and short - see RV_TICK_MS.
     LONGLONG  m_period100ns    = 0;
+
+    /// How far the position must advance between notifications, and which
+    /// notification the position last crossed. Zero when the OS allocated the
+    /// buffer without asking for notifications, in which case no event exists
+    /// to signal and this is unused.
+    ///
+    /// Notifications are derived from the position rather than from the timer
+    /// because the two now run at different rates: the timer ticks far faster
+    /// than the OS wants to be woken.
+    ULONG     m_notifyPeriodBytes = 0;
+    ULONGLONG m_lastNotifyIndex   = 0;
 
     // Notification events registered by the OS. Two is what the audio engine
     // uses in practice; the array avoids an allocation on a hot path.

@@ -24,7 +24,7 @@ CatalogFile = RadioVoiceAudio.cat
 ; Bump this whenever the .sys changes. Windows compares the package version and
 ; will keep running the binary it already has if the version has not moved,
 ; which looks exactly like a build that did not take effect.
-DriverVer   = 07/27/2026,1.0.0.4
+DriverVer   = 07/27/2026,1.0.0.5
 PnpLockdown = 1
 
 [SourceDisksNames]

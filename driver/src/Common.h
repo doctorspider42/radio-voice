@@ -95,10 +95,19 @@
 #define RV_MIN_BUFFER_MS 3
 #define RV_MAX_BUFFER_MS 500
 
-// Interval at which the position register advances and notification events
-// fire when the client did not ask for notifications. 10 ms matches the
-// default Windows shared-mode period.
-#define RV_DEFAULT_PERIOD_MS 10
+// Interval at which the timer moves audio and advances the reported position.
+//
+// This is not a buffering choice, it is the resolution of the position itself.
+// A real card has a register the OS can read at any instant; here the position
+// only changes when the timer runs, so between ticks it is a lie that grows
+// staler the longer the tick. The audio engine polls roughly every 10 ms and
+// expects what it reads to track real time, so the tick has to be well under
+// that - otherwise it sees the position stand still and then jump, and it
+// writes in bursts separated by silence instead of streaming.
+//
+// Deliberately independent of the buffer size and of the notification period.
+// Tying it to either is what produced a 64 ms tick on a 64 ms buffer.
+#define RV_TICK_MS 1
 
 // Depth of the ring joining render to capture. Large enough to absorb the two
 // endpoints' timers drifting apart before either is opened in lockstep, small
