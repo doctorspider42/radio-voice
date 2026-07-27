@@ -155,14 +155,21 @@ Sprawdzone na tej maszynie, na realnym sprzęcie i realnych wtyczkach:
   Knob renderuje się z działającymi miernikami
 - automatyczne wykrycie VB-CABLE i ustawienie go jako wyjście
 
+Sterownik (`driver/`) kompiluje się i linkuje czysto pod MSVC 19.44 + WDK
+10.0.26100, a cały łańcuch podpisywania — generowanie katalogu przez Inf2Cat i
+podpis `.sys` oraz `.cat` — został przetestowany od początku do końca.
+
 Czego **nie** udało się zweryfikować w tym środowisku:
 
-- **MSVC** — brak workloadu C++; CMake go obsługuje, ale build nie był uruchomiony
 - **ASIO** — SDK wymaga ręcznego pobrania; kod skompilowany nigdy nie był
 - **WASAPI exclusive** i **DirectSound** — ścieżki napisane, ale nie uruchomione
-- **sterownik jądra** — brak WDK na tej maszynie, patrz `driver/README.md`
+- **sterownik w działaniu** — załadowanie wymaga trybu testowego i restartu
+  maszyny; nie robiłem tego. Szczegóły i lista miejsc do sprawdzenia w razie
+  problemów: [`driver/README.md`](driver/README.md)
 - interakcja myszą z GUI — automatyzacja nie potrafiła dostarczyć kliknięć do
   okna (przechwytywał je Explorer), więc klikanie sprawdź proszę sam
+- build pod **MSVC** samej aplikacji (CMake go obsługuje, ale uruchamiałem
+  tylko MinGW)
 
 ---
 
