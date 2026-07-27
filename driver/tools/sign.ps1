@@ -100,38 +100,55 @@ Write-Host "signtool : $signtool"
 Write-Host ""
 
 #-----------------------------------------------------------------------------
-# Catalogue
+# Order matters, and getting it wrong fails much later with an opaque error.
+#
+#   1. Sign the .sys.  Embedding a signature changes the file.
+#   2. Generate the .cat.  Inf2Cat hashes the files the INF lists, so it has to
+#      run against the *signed* .sys.
+#   3. Sign the .cat.
+#
+# Cataloguing first and signing afterwards leaves the catalogue holding the hash
+# of a file that no longer exists in that form. Everything appears to succeed,
+# and pnputil then rejects the package with SPAPI_E_DRIVER_STORE_ADD_FAILED
+# (0xE0000247), which says nothing about hashes.
 #-----------------------------------------------------------------------------
+
+$sys = Join-Path $Path 'RadioVoiceAudio.sys'
+$cat = Join-Path $Path 'RadioVoiceAudio.cat'
+
+Write-Host "Signing RadioVoiceAudio.sys..."
+
+# No /t timestamp: a test signature is only meaningful while the test
+# certificate is trusted on this machine anyway, and a timestamp server would
+# make the build depend on the network.
+& $signtool sign /fd SHA256 @signArguments $sys
+if ($LASTEXITCODE -ne 0) {
+    throw "signtool failed on $sys"
+}
+
+# A catalogue left over from a previous run would be hashed into nothing useful
+# and could mask the regeneration failing.
+Remove-Item $cat -Force -ErrorAction SilentlyContinue
 
 Write-Host "Generating the catalogue..."
 
-# Inf2Cat insists on a path without a trailing separator and rejects relative
-# ones outright.
-& $inf2cat /driver:"$Path" /os:$OsList /verbose
+# Inf2Cat insists on an absolute path without a trailing separator.
+& $inf2cat /driver:"$Path" /os:$OsList
 if ($LASTEXITCODE -ne 0) {
     throw "Inf2Cat failed. The usual cause is a mismatch between the INF's DriverVer/CatalogFile and the files present."
 }
 
-#-----------------------------------------------------------------------------
-# Signatures
-#-----------------------------------------------------------------------------
-
-$targets = @(
-    (Join-Path $Path 'RadioVoiceAudio.sys')
-    (Join-Path $Path 'RadioVoiceAudio.cat')
-)
-
-foreach ($target in $targets) {
-    Write-Host "Signing $(Split-Path $target -Leaf)..."
-
-    # No /t timestamp: a test signature is only meaningful while the test
-    # certificate is trusted on this machine anyway, and a timestamp server
-    # would make the build depend on the network.
-    & $signtool sign /fd SHA256 @signArguments $target
-    if ($LASTEXITCODE -ne 0) {
-        throw "signtool failed on $target"
-    }
+if (-not (Test-Path $cat)) {
+    throw "Inf2Cat reported success but produced no catalogue."
 }
+
+Write-Host "Signing RadioVoiceAudio.cat..."
+& $signtool sign /fd SHA256 @signArguments $cat
+if ($LASTEXITCODE -ne 0) {
+    throw "signtool failed on $cat"
+}
+
+$targets = @($sys, $cat)
 
 Write-Host ""
 Write-Host "Verifying..."
@@ -161,6 +178,24 @@ try {
     }
 } finally {
     $ErrorActionPreference = $previousPreference
+}
+
+# Does the catalogue actually vouch for the .sys as it now stands? This is the
+# check that catches a stale catalogue at the point where it can be explained,
+# rather than leaving pnputil to reject the package later with a code that says
+# nothing about hashes.
+$ErrorActionPreference = 'Continue'
+$catalogueCheck = & $signtool verify /pa /c $cat $sys 2>&1 | ForEach-Object { "$_" }
+$ErrorActionPreference = 'Stop'
+
+if ($catalogueCheck -match 'not found in the catalog|hash of the file') {
+    throw @"
+The catalogue does not match RadioVoiceAudio.sys.
+
+That means the two were produced out of order - the catalogue records a hash of
+the file as it was before it got its signature. Re-run this script; it signs the
+.sys first and only then builds the catalogue.
+"@
 }
 
 Write-Host ""

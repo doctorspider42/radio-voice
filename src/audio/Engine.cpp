@@ -96,6 +96,12 @@ bool Engine::start(const EngineConfig& config)
             snapshot.outputSampleRate, snapshot.outputChannels,
             internalChannels_, maxBlockFrames_, targetRingFill_);
 
+    const LatencyBreakdown latency = latencyBreakdown();
+    RV_INFO("latency %.1f ms = input device %.1f + clock bridge %.1f + chain %.1f "
+            "+ limiter %.1f + output device %.1f",
+            latency.total(), latency.inputDevice, latency.bridge, latency.chain,
+            latency.limiter, latency.outputDevice);
+
     return true;
 }
 
@@ -351,25 +357,36 @@ void Engine::allocateBuffers(double outputSampleRate)
         std::max(1, static_cast<int>(outputSampleRate / std::max(1, maxBlockFrames_)));
 }
 
-float Engine::latencyMs() const
+Engine::LatencyBreakdown Engine::latencyBreakdown() const
 {
+    LatencyBreakdown breakdown;
+
     const EngineStatus snapshot = status();
     if (!snapshot.running || snapshot.outputSampleRate <= 0.0)
-        return 0.0f;
+        return breakdown;
 
-    // Input-side figures are in input frames; convert them to the output clock
-    // before adding, otherwise a 44.1/48 mismatch skews the total.
-    const double inputFrames =
-        (input_ ? input_->latencyFrames() : 0) + targetRingFill_;
-    const double inputInOutputFrames =
-        inputFrames / std::max(1e-9, nominalRatio_);
+    const double outputRate = snapshot.outputSampleRate;
+    const auto toMs = [outputRate](double frames) {
+        return static_cast<float>(1000.0 * frames / outputRate);
+    };
 
-    const double frames = inputInOutputFrames +
-                          chain_.latencySamples() +
-                          limiter_.latencySamples() +
-                          (output_ ? output_->latencyFrames() : 0);
+    // Input-side figures are counted in input frames, so they are converted to
+    // the output clock before being added to anything else - otherwise a
+    // 96/48 kHz pair reports twice the delay it really has.
+    const double ratio = std::max(1e-9, nominalRatio_);
 
-    return static_cast<float>(1000.0 * frames / snapshot.outputSampleRate);
+    breakdown.inputDevice = toMs((input_ ? input_->latencyFrames() : 0) / ratio);
+    breakdown.bridge      = toMs(targetRingFill_ / ratio);
+    breakdown.chain       = toMs(chain_.latencySamples());
+    breakdown.limiter     = toMs(limiter_.latencySamples());
+    breakdown.outputDevice = toMs(output_ ? output_->latencyFrames() : 0);
+
+    return breakdown;
+}
+
+float Engine::latencyMs() const
+{
+    return latencyBreakdown().total();
 }
 
 void Engine::updateSlowMeters()

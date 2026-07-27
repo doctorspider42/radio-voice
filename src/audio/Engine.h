@@ -84,6 +84,25 @@ public:
     dsp::SpectrumAnalyzer& inputSpectrum() { return inputSpectrum_; }
     dsp::SpectrumAnalyzer& outputSpectrum() { return outputSpectrum_; }
 
+    /// Where the end-to-end delay actually goes, in milliseconds on the output
+    /// clock. A single total answers "how much" but never "why", and the
+    /// answer is almost always one term dominating the rest.
+    struct LatencyBreakdown {
+        float inputDevice  = 0.0f; ///< Driver-reported capture latency.
+        float bridge       = 0.0f; ///< The ring between the two device clocks.
+        float chain        = 0.0f; ///< Look-ahead in the gate, compressor and plugins.
+        float limiter      = 0.0f; ///< The output limiter's look-ahead.
+        float outputDevice = 0.0f; ///< Driver-reported render latency.
+
+        float total() const
+        {
+            return inputDevice + bridge + chain + limiter + outputDevice;
+        }
+    };
+
+    /// UI thread only.
+    LatencyBreakdown latencyBreakdown() const;
+
     /// Total round-trip latency estimate in milliseconds. UI thread only.
     float latencyMs() const;
 

@@ -7,17 +7,21 @@
 ::
 ::  What it does, in order:
 ::    1. builds the driver             (driver\build.ps1)
-::    2. creates a test certificate    (tools\make-test-cert.ps1)  - once
-::    3. signs the .sys and the .cat   (tools\sign.ps1)
-::    4. installs and creates the device (tools\install.ps1)
+::    2. creates a test certificate    (driver\tools\make-test-cert.ps1)  - once
+::    3. signs the .sys and the .cat   (driver\tools\sign.ps1)
+::    4. installs and creates the device (driver\tools\install.ps1)
 ::
 ::  Test signing has to be on before step 4 can work, and turning it on needs a
 ::  reboot. This script detects that, offers to turn it on, and tells you to run
 ::  it again afterwards - it cannot do anything useful across a reboot.
+::
+::  To remove everything again: uninstall-driver.cmd
 ::=============================================================================
 
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
+
+set DRIVER=%~dp0driver
 
 ::-----------------------------------------------------------------------------
 :: Elevate
@@ -80,27 +84,27 @@ echo [1/4] Test signing is on.
 ::-----------------------------------------------------------------------------
 echo.
 echo [2/4] Building the driver...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build.ps1" -Configuration Release
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\build.ps1" -Configuration Release
 if %errorlevel% neq 0 goto :fail
 
 ::-----------------------------------------------------------------------------
-:: Certificate
+:: Certificate and signature
 ::
-:: Created only once. Re-running would mint a second certificate and leave the
-:: first one trusted for no reason.
+:: The certificate is created only once. Re-running would mint a second one and
+:: leave the first trusted for no reason.
 ::-----------------------------------------------------------------------------
 echo.
-if exist "%~dp0build\cert\thumbprint.txt" (
+if exist "%DRIVER%\build\cert\thumbprint.txt" (
     echo [3/4] Reusing the existing test certificate.
 ) else (
     echo [3/4] Creating a test certificate...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\make-test-cert.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\tools\make-test-cert.ps1"
     if !errorlevel! neq 0 goto :fail
 )
 
 echo.
 echo       Signing...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\sign.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\tools\sign.ps1"
 if %errorlevel% neq 0 goto :fail
 
 ::-----------------------------------------------------------------------------
@@ -108,7 +112,7 @@ if %errorlevel% neq 0 goto :fail
 ::-----------------------------------------------------------------------------
 echo.
 echo [4/4] Installing...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\tools\install.ps1"
 if %errorlevel% neq 0 goto :fail
 
 echo.

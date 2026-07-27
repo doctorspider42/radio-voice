@@ -59,8 +59,45 @@ is still on; turn it off in the firmware first.
 
 Write-Host "Adding the driver package to the driver store..."
 pnputil /add-driver $inf /install
-if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 259) {
-    throw "pnputil failed with exit code $LASTEXITCODE"
+$pnputilResult = $LASTEXITCODE
+
+# 259 is ERROR_NO_MORE_ITEMS, which pnputil returns when the package is already
+# present and unchanged - not a failure.
+if ($pnputilResult -ne 0 -and $pnputilResult -ne 259) {
+    # The SPAPI codes are reported as signed integers and mean nothing on
+    # sight, so the ones that actually happen here get named.
+    $explanation = switch ($pnputilResult) {
+        -536870329 {   # 0xE0000247 SPAPI_E_DRIVER_STORE_ADD_FAILED
+@"
+SPAPI_E_DRIVER_STORE_ADD_FAILED - Windows rejected the package.
+
+In order of likelihood:
+
+  * The catalogue does not match the .sys. This happens when the catalogue is
+    generated before the driver is signed, because embedding a signature
+    changes the file. tools\sign.ps1 does them in the right order; re-run it.
+
+  * The test certificate is not in LocalMachine\Root and TrustedPublisher.
+    Run tools\make-test-cert.ps1 from an elevated prompt.
+
+  * Test signing is not actually active. The watermark in the bottom-right
+    corner of the desktop is the reliable indicator, not what bcdedit printed
+    when it was set.
+"@
+        }
+        -536870333 {   # 0xE0000243 SPAPI_E_NO_CATALOG_FOR_OEM_INF
+            "SPAPI_E_NO_CATALOG_FOR_OEM_INF - the package has no catalogue. Run tools\sign.ps1."
+        }
+        -536870334 {   # 0xE0000242
+            "The package failed signature verification. Check that the test certificate is trusted."
+        }
+        default { "" }
+    }
+
+    if ($explanation) {
+        throw "pnputil failed ($pnputilResult).`n`n$explanation"
+    }
+    throw "pnputil failed with exit code $pnputilResult"
 }
 
 Write-Host ""

@@ -48,6 +48,8 @@ Instalacje SDK i WDK są maszynowe, więc wyskoczy UAC.
 
 ## Wszystko naraz
 
+Z katalogu głównego repo:
+
 ```
 install-driver.cmd
 ```

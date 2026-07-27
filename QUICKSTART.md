@@ -156,7 +156,7 @@ dwóch restartów.
 ### Najkrótsza droga
 
 ```
-driver\install-driver.cmd
+install-driver.cmd
 ```
 
 Sam się podnosi do administratora i robi wszystko po kolei: sprawdza tryb
@@ -164,7 +164,7 @@ testowy, buduje, tworzy certyfikat, podpisuje, instaluje. Jeśli tryb testowy
 jest wyłączony — zaproponuje włączenie i poprosi o restart, po którym trzeba
 uruchomić go ponownie (przez restart nie da się przejść w jednym poleceniu).
 
-Odinstalowanie: `driver\uninstall-driver.cmd`.
+Odinstalowanie: `uninstall-driver.cmd`.
 
 Poniżej to samo krok po kroku, gdyby coś poszło nie tak.
 
@@ -330,7 +330,7 @@ Skanowane są standardowe katalogi VST3. Wtyczki 32-bitowe z
 ### Sterownik
 
 ```
-driver\uninstall-driver.cmd
+uninstall-driver.cmd
 ```
 
 Usuwa urządzenie, pakiet sterownika i certyfikat testowy. Tryb testowy zostaje

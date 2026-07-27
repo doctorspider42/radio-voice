@@ -508,6 +508,35 @@ void App::renderTopBar()
         ImGui::SameLine(0, 5);
         ImGui::TextUnformatted(text);
 
+        // A single number never explains itself, and here one term almost
+        // always dominates the rest - usually the clock bridge, which no amount
+        // of adding or removing plugins will move.
+        if (ImGui::IsItemHovered()) {
+            const auto parts = engine_->latencyBreakdown();
+            ImGui::SetTooltip(
+                "input device    %5.1f ms\n"
+                "clock bridge    %5.1f ms\n"
+                "chain           %5.1f ms\n"
+                "limiter         %5.1f ms\n"
+                "output device   %5.1f ms\n"
+                "                ------\n"
+                "total           %5.1f ms\n"
+                "\n"
+                "The clock bridge is the buffer that lets the capture and\n"
+                "playback devices run on their own clocks. It is sized from\n"
+                "the device period, so exclusive mode - or a smaller period in\n"
+                "Windows sound settings - is what shrinks it.\n"
+                "\n"
+                "Shared-mode drivers often report zero device latency, so the\n"
+                "true figure is somewhat higher than this.",
+                static_cast<double>(parts.inputDevice),
+                static_cast<double>(parts.bridge),
+                static_cast<double>(parts.chain),
+                static_cast<double>(parts.limiter),
+                static_cast<double>(parts.outputDevice),
+                static_cast<double>(parts.total()));
+        }
+
         ImGui::SameLine(0, 18);
         const float load = meters_.cpuLoad.load();
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));

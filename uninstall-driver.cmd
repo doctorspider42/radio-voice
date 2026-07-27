@@ -10,6 +10,8 @@
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
+set DRIVER=%~dp0driver
+
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting administrator rights...
@@ -23,7 +25,7 @@ echo  RadioVoice Virtual Audio Cable - uninstall
 echo ================================================================
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\uninstall.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DRIVER%\tools\uninstall.ps1"
 set UNINSTALL_RESULT=%errorlevel%
 
 echo.
