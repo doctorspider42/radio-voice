@@ -43,6 +43,9 @@ bufora opóźnienia w torze, który użytkownik odsłuchuje na żywo.
 
 ---
 
+> **Chcesz to po prostu uruchomić?** [QUICKSTART.md](QUICKSTART.md) prowadzi od
+> zera do przetworzonego mikrofonu w Discordzie, razem z instalacją sterownika.
+
 ## Wymagania
 
 - Windows 10 1903+ lub Windows 11 (x64)
