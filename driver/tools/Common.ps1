@@ -6,6 +6,21 @@
 
 $ErrorActionPreference = 'Stop'
 
+<#
+    Directory of the running script.
+
+    $PSScriptRoot is unreliable inside a param() block: launched as
+    `powershell -File .\tools\x.ps1` with a relative path, Windows PowerShell
+    leaves it empty there while populating it correctly in the body. Defaults
+    that depend on it therefore have to be resolved after the parameters are
+    bound, which is what this exists for.
+#>
+function Get-ToolsRoot {
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    if ($PSCommandPath) { return (Split-Path -Parent $PSCommandPath) }
+    return (Get-Location).Path
+}
+
 function Get-KitRoot {
     $root = "${env:ProgramFiles(x86)}\Windows Kits\10"
     if (-not (Test-Path $root)) {

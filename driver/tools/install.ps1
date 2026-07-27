@@ -22,13 +22,17 @@
 
 [CmdletBinding()]
 param(
-    [string] $Path = (Join-Path $PSScriptRoot '..\build\Release')
+    [string] $Path
 )
 
-. (Join-Path $PSScriptRoot 'Common.ps1')
+$toolsRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
+. (Join-Path $toolsRoot 'Common.ps1')
 
 Assert-Elevated 'Installing a driver'
 
+if (-not $Path) {
+    $Path = Join-Path $toolsRoot '..\build\Release'
+}
 $Path = (Resolve-Path $Path).Path
 $inf  = Join-Path $Path 'RadioVoiceAudio.inf'
 $cat  = Join-Path $Path 'RadioVoiceAudio.cat'

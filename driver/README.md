@@ -113,10 +113,25 @@ cd driver
 .\tools\sign.ps1
 ```
 
-`make-test-cert.ps1` tworzy certyfikat, eksportuje `.pfx` i `.cer`, i wstawia
-`.cer` do `LocalMachine\Root` oraz `LocalMachine\TrustedPublisher`. Pierwszy
-magazyn sprawia, że podpis daje się zweryfikować; drugi wycisza pytanie „Czy
-chcesz zainstalować to oprogramowanie urządzenia?”.
+Żaden z tych skryptów o nic nie pyta.
+
+`make-test-cert.ps1` tworzy certyfikat, zostawia klucz prywatny w Twoim
+magazynie (`Cert:\CurrentUser\My`), zapisuje publiczny `.cer` oraz odcisk palca,
+i wstawia `.cer` do `LocalMachine\Root` oraz `LocalMachine\TrustedPublisher`.
+Pierwszy magazyn sprawia, że podpis daje się zweryfikować; drugi wycisza pytanie
+„Czy chcesz zainstalować to oprogramowanie urządzenia?”.
+
+`sign.ps1` wskazuje `signtool` na klucz w magazynie po odcisku palca. Nie ma
+pliku `.pfx`, więc nie ma też hasła do wymyślania i pamiętania — hasło
+chroniłoby plik leżący obok tego, co chroni, co niczego nie wnosi.
+
+Plik `.pfx` przydaje się tylko przy przenoszeniu certyfikatu na inną maszynę
+albo do CI, i wtedy jest opcjonalny:
+
+```powershell
+.\tools\make-test-cert.ps1 -ExportPfx      # dopiero teraz zapyta o hasło
+.\tools\sign.ps1 -Pfx .\build\cert\RadioVoiceTest.pfx
+```
 
 `sign.ps1` generuje katalog (`Inf2Cat`) i podpisuje **oba** pliki:
 

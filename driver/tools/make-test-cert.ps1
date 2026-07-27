@@ -26,31 +26,42 @@
 .PARAMETER Subject
     Certificate subject. Anything is fine; it appears in the driver's signature.
 
+.PARAMETER ExportPfx
+    Also export the private key to a password-protected .pfx.
+
+    Not needed to sign on this machine: the key stays in the certificate store
+    and signtool can use it from there by thumbprint. Ask for a .pfx only to
+    carry the certificate to another machine or into CI - and note that doing so
+    means choosing and then remembering a password for it.
+
 .PARAMETER Password
-    Password protecting the exported .pfx. Prompted for if omitted.
+    Password for the .pfx. Only used with -ExportPfx; prompted for if omitted.
 
 .PARAMETER OutputDirectory
-    Where to write RadioVoiceTest.pfx and RadioVoiceTest.cer.
+    Where to write RadioVoiceTest.cer (and the .pfx, if requested).
 #>
 
 [CmdletBinding()]
 param(
     [string] $Subject = 'CN=RadioVoice Test Signing',
+    [switch] $ExportPfx,
     [securestring] $Password,
-    [string] $OutputDirectory = (Join-Path $PSScriptRoot '..\build\cert')
+    [string] $OutputDirectory
 )
 
-. (Join-Path $PSScriptRoot 'Common.ps1')
+$toolsRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
+. (Join-Path $toolsRoot 'Common.ps1')
 
-if (-not $Password) {
-    $Password = Read-Host -AsSecureString "Password for the exported .pfx"
+if (-not $OutputDirectory) {
+    $OutputDirectory = Join-Path $toolsRoot '..\build\cert'
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $OutputDirectory = (Resolve-Path $OutputDirectory).Path
 
-$pfx = Join-Path $OutputDirectory 'RadioVoiceTest.pfx'
-$cer = Join-Path $OutputDirectory 'RadioVoiceTest.cer'
+$pfx        = Join-Path $OutputDirectory 'RadioVoiceTest.pfx'
+$cer        = Join-Path $OutputDirectory 'RadioVoiceTest.cer'
+$thumbprint = Join-Path $OutputDirectory 'thumbprint.txt'
 
 #-----------------------------------------------------------------------------
 # 1. Create
@@ -78,11 +89,22 @@ Write-Host "  thumbprint: $($certificate.Thumbprint)"
 # 2. Export
 #-----------------------------------------------------------------------------
 
-Export-PfxCertificate -Cert $certificate -FilePath $pfx -Password $Password | Out-Null
-Export-Certificate   -Cert $certificate -FilePath $cer | Out-Null
-
-Write-Host "  pfx: $pfx"
+# The public certificate, which is what gets trusted. No secret in it.
+Export-Certificate -Cert $certificate -FilePath $cer | Out-Null
 Write-Host "  cer: $cer"
+
+# The thumbprint is how sign.ps1 finds the key in the store, so no private key
+# ever has to leave it and no password has to be invented to protect a file.
+Set-Content -Path $thumbprint -Value $certificate.Thumbprint -Encoding ascii
+Write-Host "  thumbprint file: $thumbprint"
+
+if ($ExportPfx) {
+    if (-not $Password) {
+        $Password = Read-Host -AsSecureString "Password to protect $(Split-Path $pfx -Leaf)"
+    }
+    Export-PfxCertificate -Cert $certificate -FilePath $pfx -Password $Password | Out-Null
+    Write-Host "  pfx: $pfx  (keep the password - sign.ps1 -Pfx will ask for it)"
+}
 
 #-----------------------------------------------------------------------------
 # 3. Trust
@@ -102,9 +124,10 @@ if (Test-Elevated) {
 } else {
     Write-Host ""
     Write-Warning @"
-The certificate was created and exported, but NOT trusted: that needs elevation.
+The certificate was created, but NOT trusted: that needs elevation.
 
-Run this from an elevated PowerShell to finish:
+Signing already works - the key is in your store. Installing the driver will
+not, until Windows trusts the certificate. Run this from an elevated PowerShell:
 
     Import-Certificate -FilePath "$cer" -CertStoreLocation Cert:\LocalMachine\Root
     Import-Certificate -FilePath "$cer" -CertStoreLocation Cert:\LocalMachine\TrustedPublisher

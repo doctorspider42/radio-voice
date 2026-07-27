@@ -11,7 +11,8 @@
 [CmdletBinding()]
 param()
 
-. (Join-Path $PSScriptRoot 'Common.ps1')
+$toolsRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
+. (Join-Path $toolsRoot 'Common.ps1')
 
 Assert-Elevated 'Removing a driver'
 
