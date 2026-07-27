@@ -77,6 +77,7 @@ Config Config::load()
     config.autoStart        = root.value("autoStart", config.autoStart);
     config.windowWidth      = root.value("windowWidth", config.windowWidth);
     config.windowHeight     = root.value("windowHeight", config.windowHeight);
+    config.chainCollapsed   = root.value("chainCollapsed", config.chainCollapsed);
 
     if (root.contains("params")) {
         const json& p = root["params"];
@@ -161,6 +162,7 @@ void Config::save() const
     root["autoStart"]        = autoStart;
     root["windowWidth"]      = windowWidth;
     root["windowHeight"]     = windowHeight;
+    root["chainCollapsed"]   = chainCollapsed;
 
     json p;
     p["inputGainDb"]  = params.inputGainDb;

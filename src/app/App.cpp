@@ -439,9 +439,15 @@ void App::render()
     // look right at the size they were designed for and squeeze the centre to
     // nothing on a smaller window - which is where the EQ and the dynamics
     // panels live, so it is the worst place to lose room.
-    const float totalWidth  = ImGui::GetContentRegionAvail().x;
-    const float leftWidth   = std::clamp(totalWidth * 0.23f, 250.0f, 340.0f);
-    const float rightWidth  = std::clamp(totalWidth * 0.24f, 260.0f, 360.0f);
+    const float totalWidth = ImGui::GetContentRegionAvail().x;
+    const float leftWidth  = std::clamp(totalWidth * 0.23f, 250.0f, 340.0f);
+
+    // Folded away, the chain keeps just enough width for the button that brings
+    // it back; everything it gives up goes to the centre column.
+    const float rightWidth = config_.chainCollapsed
+                                 ? 34.0f
+                                 : std::clamp(totalWidth * 0.24f, 260.0f, 360.0f);
+
     const float centreWidth = totalWidth - leftWidth - rightWidth -
                               ImGui::GetStyle().ItemSpacing.x * 2;
 
@@ -1293,6 +1299,56 @@ void App::renderLimiterPanel()
 
 void App::renderChainPanel()
 {
+    // ---- folded away -----------------------------------------------------
+    if (config_.chainCollapsed) {
+        const float strip = ImGui::GetContentRegionAvail().x;
+
+        if (ImGui::Button("<", ImVec2(-1.0f, 0.0f))) {
+            config_.chainCollapsed = false;
+            markDirty();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Show the processing chain");
+
+        ImGui::Spacing();
+
+        // One letter per line: a vertical label is the only way to name a strip
+        // this narrow, and it keeps the collapsed column identifiable rather
+        // than just a mystery button.
+        ImGui::PushFont(fonts_.small, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        for (const char* c = "CHAIN"; *c; ++c) {
+            const char letter[2] = {*c, '\0'};
+            const float width = ImGui::CalcTextSize(letter).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - width) * 0.5f);
+            ImGui::TextUnformatted(letter);
+        }
+        ImGui::PopStyleColor();
+
+        // The count is what someone actually wants to know while it is folded:
+        // whether anything is in the chain at all.
+        ImGui::Spacing();
+        char count[8];
+        std::snprintf(count, sizeof(count), "%zu", chainNodes_.size());
+        const float countWidth = ImGui::CalcTextSize(count).x;
+        ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - countWidth) * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kAccent));
+        ImGui::TextUnformatted(count);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+
+        return;
+    }
+
+    // ---- expanded --------------------------------------------------------
+    if (ImGui::Button(">", ImVec2(24, 0))) {
+        config_.chainCollapsed = true;
+        markDirty();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Fold the processing chain away");
+
+    ImGui::SameLine();
     ImGui::PushFont(fonts_.medium, 0.0f);
     ImGui::TextUnformatted("Processing Chain");
     ImGui::PopFont();

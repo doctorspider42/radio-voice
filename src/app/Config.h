@@ -46,6 +46,9 @@ struct Config {
     int windowWidth  = 1360;
     int windowHeight = 840;
 
+    /// Whether the processing chain is folded away to a narrow strip.
+    bool chainCollapsed = false;
+
     /// Values of every knob, stored flat.
     struct ParamValues {
         float inputGainDb  = 0.0f;
