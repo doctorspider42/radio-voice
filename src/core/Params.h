@@ -24,6 +24,12 @@ struct Params {
     std::atomic<bool>  mute{false};
     std::atomic<bool>  bypassAll{false};   ///< Master bypass: raw input to output.
 
+    /// Level of the monitor feed only. Separate from outputGainDb on purpose:
+    /// how loud the operator wants their own headphones has nothing to do with
+    /// the level being sent onwards, and moving one must never move the other.
+    std::atomic<float> monitorGainDb{0.0f};
+    std::atomic<bool>  monitorMute{false};
+
     // -- high/low cut ------------------------------------------------------
     std::atomic<bool>  hpfEnabled{true};
     std::atomic<float> hpfHz{80.0f};       ///< 24 dB/oct Butterworth.
@@ -93,6 +99,8 @@ struct Params {
         outputGainDb.store(0.0f);
         mute.store(false);
         bypassAll.store(false);
+        monitorGainDb.store(0.0f);
+        monitorMute.store(false);
         hpfEnabled.store(true);
         hpfHz.store(80.0f);
         lpfEnabled.store(false);

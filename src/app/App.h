@@ -58,7 +58,11 @@ private:
     void renderLogWindow();
 
     // --- device helpers ---------------------------------------------------
-    void renderDeviceSelector(const char* label, DeviceConfig& device, bool isInput);
+    /// `allowAsio` is false for the monitor: an ASIO driver opens its device
+    /// exclusively, so offering it there would let the user pick a backend that
+    /// can only contend with the main path.
+    void renderDeviceSelector(const char* label, DeviceConfig& device, bool isInput,
+                              bool allowAsio = true);
     bool deviceSelectionDiffers() const;
 
     // --- engine -----------------------------------------------------------

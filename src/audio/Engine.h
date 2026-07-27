@@ -1,8 +1,10 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "audio/DriftResampler.h"
 #include "audio/Stream.h"
@@ -21,6 +23,14 @@ class AsioStream;
 struct EngineConfig {
     StreamConfig input;
     StreamConfig output;
+
+    /// Optional second render device carrying the same processed signal.
+    ///
+    /// The main output usually goes to a virtual cable, and a cable is deaf by
+    /// definition - whatever is sent into it cannot be heard. This is how the
+    /// operator hears their own voice while it is being sent somewhere else.
+    StreamConfig monitor;
+    bool         monitorEnabled = false;
 
     /// Width of the internal signal path. Two is the default even for a mono
     /// microphone: a large share of VST3 plugins are stereo-only, and the cost
@@ -50,6 +60,14 @@ struct EngineStatus {
 
     std::string inputFormat;
     std::string outputFormat;
+
+    /// Empty when monitoring is off or opened cleanly. A monitor that fails to
+    /// open never stops the engine: the signal still reaches its destination,
+    /// and only the operator's own headphones are affected.
+    std::string monitorError;
+    bool        monitorRunning    = false;
+    double      monitorSampleRate = 0.0;
+    int         monitorChannels   = 0;
 };
 
 /// Owns the streams, the signal path and the clock bridge between them.
@@ -117,8 +135,45 @@ public:
     void produce(float* interleaved, int channels, int frames) override;
 
 private:
+    /// Feeds the monitor device from a ring the main output thread fills.
+    ///
+    /// It cannot simply copy: the monitor card has its own oscillator, so it
+    /// needs the same drift-corrected bridge the microphone gets. Without one,
+    /// the two clocks separate by tens of parts per million and the monitor
+    /// buffer creeps to empty or full over a few minutes, then clicks.
+    ///
+    /// Deliberately its own ring rather than a tee into the main path: a
+    /// monitor that stalls must not be able to hold up the signal that is
+    /// actually being sent somewhere.
+    class MonitorTap final : public IAudioProducer {
+    public:
+        void prepare(AudioRing& ring, double sourceRate, double deviceRate,
+                     int devicePeriod, int targetFill,
+                     const std::atomic<float>& gainDb);
+        void produce(float* interleaved, int channels, int frames) override;
+
+    private:
+        AudioRing*      ring_ = nullptr;
+        DriftResampler  resampler_;
+        DriftController drift_;
+        dsp::PlanarBuffer  planar_;
+        dsp::PlanarBuffer  work_;
+        std::vector<float> staging_;
+
+        double nominalRatio_ = 1.0;
+        int    targetFill_   = 0;
+        int    maxFrames_    = 0;
+        bool   primed_       = false;
+
+        /// Read straight from Params on the audio thread, like every other
+        /// gain in the engine.
+        const std::atomic<float>* gainDb_ = nullptr;
+        dsp::Smoothed             gain_;
+    };
+
     bool createStreams();
     bool openStreams();
+    bool openMonitor(double sourceRate, int sourceChannels);
     void closeStreams();
     void allocateBuffers(double outputSampleRate);
     void processChunk(float* dst, int dstChannels, int frames);
@@ -144,6 +199,16 @@ private:
     AudioRing       inputRing_;
     DriftResampler  resampler_;
     DriftController drift_;
+
+    std::unique_ptr<IOutputStream> ownedMonitor_;
+    IOutputStream*                 monitor_ = nullptr;
+    AudioRing                      monitorRing_;
+    MonitorTap                     monitorTap_;
+
+    /// Read by the main output thread every block. Set only while that thread
+    /// is stopped, so a plain flag would do - it is atomic to say plainly that
+    /// two threads look at it.
+    std::atomic<bool> monitorActive_{false};
 
     dsp::Chain            chain_;
     dsp::Limiter          limiter_;

@@ -123,12 +123,22 @@ void Engine::stop()
     }
 
     std::lock_guard lock(statusMutex_);
-    status_.running = false;
+    status_.running        = false;
+    status_.monitorRunning = false;
 }
 
 void Engine::closeStreams()
 {
-    // Render first: it is the side that pulls, so stopping it guarantees no
+    // Monitor first, and the flag before the stream: the main output thread
+    // reads it to decide whether to fill the monitor ring, and a stopped
+    // consumer with a live producer would just fill the ring and wedge.
+    monitorActive_.store(false, std::memory_order_release);
+    if (monitor_)
+        monitor_->stop();
+    monitor_ = nullptr;
+    ownedMonitor_.reset();
+
+    // Render next: it is the side that pulls, so stopping it guarantees no
     // further calls into the chain while capture is torn down.
     if (output_)
         output_->stop();
@@ -140,6 +150,182 @@ void Engine::closeStreams()
     ownedInput_.reset();
     ownedOutput_.reset();
     asioShared_.reset();
+}
+
+// ---------------------------------------------------------------------------
+// Monitor
+// ---------------------------------------------------------------------------
+
+void Engine::MonitorTap::prepare(AudioRing& ring, double sourceRate, double deviceRate,
+                                 int devicePeriod, int targetFill,
+                                 const std::atomic<float>& gainDb)
+{
+    ring_         = &ring;
+    gainDb_       = &gainDb;
+    nominalRatio_ = (deviceRate > 0.0) ? sourceRate / deviceRate : 1.0;
+    targetFill_   = targetFill;
+    primed_       = false;
+
+    // Room for the largest block the device can ask for, with slack for a
+    // ratio that has drifted and for the interpolator's neighbourhood.
+    maxFrames_ = std::max(1024, devicePeriod * 2);
+    const int stagingFrames = static_cast<int>(maxFrames_ * nominalRatio_) + 64;
+
+    staging_.assign(static_cast<size_t>(stagingFrames) * kMaxChannels, 0.0f);
+    planar_.resize(ring.channels(), stagingFrames);
+    work_.resize(ring.channels(), maxFrames_);
+
+    resampler_.prepare(ring.channels());
+    drift_.reset(nominalRatio_);
+
+    gain_.prepare(static_cast<float>(deviceRate), 20.0f, 1.0f);
+}
+
+void Engine::MonitorTap::produce(float* interleaved, int channels, int frames)
+{
+    ScopedNoDenormals noDenormals;
+
+    const size_t total = static_cast<size_t>(frames) * channels;
+
+    if (!ring_ || frames <= 0) {
+        std::memset(interleaved, 0, total * sizeof(float));
+        return;
+    }
+
+    // Same priming rule as the capture bridge: silence until the ring has
+    // reached its working level, rather than resampling against an empty
+    // buffer for as long as it takes the first block to arrive.
+    if (!primed_) {
+        if (ring_->filled() < targetFill_) {
+            std::memset(interleaved, 0, total * sizeof(float));
+            return;
+        }
+        primed_ = true;
+        resampler_.reset();
+        drift_.reset(nominalRatio_);
+    }
+
+    if (targetFill_ > 0 && ring_->filled() > targetFill_ * 4)
+        ring_->trimTo(targetFill_);
+
+    const double ratio = drift_.update(ring_->filled(), targetFill_);
+
+    const int srcChannels = ring_->channels();
+    const int maxStaging  = static_cast<int>(staging_.size()) / kMaxChannels;
+    const int wanted      = std::min(frames, maxFrames_);
+    const int needed = std::min(resampler_.inputFramesNeeded(wanted, ratio), maxStaging);
+    const int available = ring_->peek(staging_.data(), needed);
+
+    planar_.setActiveFrames(available);
+    planar_.readInterleaved(staging_.data(), srcChannels, available);
+
+    work_.setActiveFrames(wanted);
+
+    bool underrun = false;
+    const int consumed = resampler_.process(planar_.data(), available,
+                                            work_.data(), wanted, ratio, underrun);
+    ring_->advanceRead(std::min(consumed, ring_->filled()));
+
+    const float target = gainDb_ ? dsp::dbToGain(gainDb_->load(std::memory_order_relaxed)) : 1.0f;
+    gain_.setTarget(target);
+    for (int i = 0; i < wanted; ++i) {
+        const float g = gain_.next();
+        for (int c = 0; c < srcChannels; ++c)
+            work_.channel(c)[i] *= g;
+    }
+
+    work_.writeInterleaved(interleaved, channels, wanted);
+
+    // A device asking for more than the tap was sized for gets silence in the
+    // tail rather than stale audio.
+    if (wanted < frames) {
+        std::memset(interleaved + static_cast<size_t>(wanted) * channels, 0,
+                    static_cast<size_t>(frames - wanted) * channels * sizeof(float));
+    }
+}
+
+bool Engine::openMonitor(double sourceRate, int sourceChannels)
+{
+    if (!config_.monitorEnabled || config_.monitor.deviceId.empty())
+        return true;
+
+    // ASIO is deliberately excluded. Its drivers are usually exclusive to one
+    // device, and a second ASIO stream would either fail to open or seize the
+    // card the main path is already using - failing the monitor is one thing,
+    // taking the signal path down with it is another.
+    switch (config_.monitor.backend) {
+        case BackendType::Wasapi:
+            ownedMonitor_ = std::make_unique<WasapiOutputStream>();
+            break;
+        case BackendType::DirectSound:
+            ownedMonitor_ = std::make_unique<DirectSoundOutputStream>();
+            break;
+        case BackendType::Asio: {
+            std::lock_guard lock(statusMutex_);
+            status_.monitorError = "ASIO cannot be used for monitoring - its drivers "
+                                   "open a device exclusively, so a second stream "
+                                   "would contend with the main path";
+            RV_WARN("%s", status_.monitorError.c_str());
+            return false;
+        }
+    }
+
+    monitor_ = ownedMonitor_.get();
+
+    StreamConfig request = config_.monitor;
+    if (!monitor_->openOutput(request)) {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError = monitor_->error();
+        RV_WARN("monitor output could not be opened: %s", status_.monitorError.c_str());
+        monitor_ = nullptr;
+        ownedMonitor_.reset();
+        return false;
+    }
+
+    const double monitorRate   = monitor_->actualSampleRate();
+    const int    monitorPeriod = std::max(1, monitor_->bufferFrames());
+
+    if (monitorRate <= 0.0) {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError = "the monitor driver reported an unusable stream format";
+        monitor_ = nullptr;
+        ownedMonitor_.reset();
+        return false;
+    }
+
+    // Sized like the capture bridge, from whichever side moves audio in bigger
+    // chunks - expressed in frames of the source, which is the main output.
+    const double ratio = sourceRate / monitorRate;
+    const double chunk = std::max(monitorPeriod * ratio,
+                                  static_cast<double>(maxBlockFrames_));
+    const int targetFill = static_cast<int>(chunk * kTargetPeriodsOfSlack);
+
+    monitorRing_.resize(sourceChannels, targetFill * 3 + monitorPeriod * 4);
+
+    monitorTap_.prepare(monitorRing_, sourceRate, monitorRate, monitorPeriod,
+                        targetFill, params_.monitorGainDb);
+
+    if (!monitor_->runOutput(monitorTap_)) {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError = monitor_->error();
+        RV_WARN("monitor output could not be started: %s", status_.monitorError.c_str());
+        monitor_->stop();
+        monitor_ = nullptr;
+        ownedMonitor_.reset();
+        return false;
+    }
+
+    monitorActive_.store(true, std::memory_order_release);
+
+    std::lock_guard lock(statusMutex_);
+    status_.monitorRunning    = true;
+    status_.monitorSampleRate = monitorRate;
+    status_.monitorChannels   = monitor_->actualChannels();
+    status_.monitorError.clear();
+
+    RV_INFO("monitor started: %.0f Hz / %d ch, ring target %d frames",
+            monitorRate, status_.monitorChannels, targetFill);
+    return true;
 }
 
 bool Engine::createStreams()
@@ -290,6 +476,17 @@ bool Engine::openStreams()
         }
     }
 
+    // ---- monitor ---------------------------------------------------------
+    // Opened last, and its failure is not the engine's failure: the signal
+    // still reaches the cable, and only the operator's headphones are missing.
+    // The error is recorded for the UI to show rather than thrown upwards.
+    {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorRunning = false;
+        status_.monitorError.clear();
+    }
+    openMonitor(outputRate, output_->actualChannels());
+
     // ---- publish what was actually negotiated ----------------------------
     std::lock_guard lock(statusMutex_);
     status_.running            = true;
@@ -414,6 +611,21 @@ void Engine::produce(float* interleaved, int channels, int frames)
         const int chunk = std::min(maxBlockFrames_, frames - done);
         processChunk(interleaved + static_cast<size_t>(done) * channels, channels, chunk);
         done += chunk;
+    }
+
+    // ---- monitor tap -----------------------------------------------------
+    // Exactly the bytes going to the destination, so what the operator hears
+    // is what is being sent - including the mute, the limiter and the output
+    // fold-down, rather than a flattering version of it.
+    //
+    // A full ring is dropped on the floor rather than waited on. The monitor
+    // is a convenience; the signal path is not, and this thread has a deadline
+    // to meet either way.
+    if (monitorActive_.load(std::memory_order_acquire)) {
+        if (params_.monitorMute.load(std::memory_order_relaxed))
+            monitorRing_.writeSilence(frames);
+        else
+            monitorRing_.write(interleaved, frames);
     }
 
     updateCpuLoad((performanceCounter() - startTicks) / counterFrequency_, frames);

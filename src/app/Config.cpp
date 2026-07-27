@@ -71,6 +71,9 @@ Config Config::load()
         readDevice(root["input"], config.input);
     if (root.contains("output"))
         readDevice(root["output"], config.output);
+    if (root.contains("monitor"))
+        readDevice(root["monitor"], config.monitor);
+    config.monitorEnabled = root.value("monitorEnabled", config.monitorEnabled);
 
     config.internalChannels = root.value("internalChannels", config.internalChannels);
     config.maxBlockFrames   = root.value("maxBlockFrames", config.maxBlockFrames);
@@ -87,6 +90,8 @@ Config Config::load()
         v.outputGainDb = p.value("outputGainDb", v.outputGainDb);
         v.mute         = p.value("mute", v.mute);
         v.bypassAll    = p.value("bypassAll", v.bypassAll);
+        v.monitorGainDb = p.value("monitorGainDb", v.monitorGainDb);
+        v.monitorMute   = p.value("monitorMute", v.monitorMute);
 
         v.hpfEnabled = p.value("hpfEnabled", v.hpfEnabled);
         v.hpfHz      = p.value("hpfHz", v.hpfHz);
@@ -156,6 +161,9 @@ void Config::save() const
     root["version"] = kConfigVersion;
     root["input"]   = writeDevice(input);
     root["output"]  = writeDevice(output);
+    root["monitor"] = writeDevice(monitor);
+
+    root["monitorEnabled"] = monitorEnabled;
 
     root["internalChannels"] = internalChannels;
     root["maxBlockFrames"]   = maxBlockFrames;
@@ -169,6 +177,8 @@ void Config::save() const
     p["outputGainDb"] = params.outputGainDb;
     p["mute"]         = params.mute;
     p["bypassAll"]    = params.bypassAll;
+    p["monitorGainDb"] = params.monitorGainDb;
+    p["monitorMute"]   = params.monitorMute;
     p["hpfEnabled"]   = params.hpfEnabled;
     p["hpfHz"]        = params.hpfHz;
     p["lpfEnabled"]   = params.lpfEnabled;
@@ -228,6 +238,8 @@ void Config::applyTo(Params& target) const
     target.outputGainDb.store(params.outputGainDb);
     target.mute.store(params.mute);
     target.bypassAll.store(params.bypassAll);
+    target.monitorGainDb.store(params.monitorGainDb);
+    target.monitorMute.store(params.monitorMute);
 
     target.hpfEnabled.store(params.hpfEnabled);
     target.hpfHz.store(params.hpfHz);
@@ -278,6 +290,8 @@ void Config::captureFrom(const Params& source)
     params.outputGainDb = source.outputGainDb.load();
     params.mute         = source.mute.load();
     params.bypassAll    = source.bypassAll.load();
+    params.monitorGainDb = source.monitorGainDb.load();
+    params.monitorMute   = source.monitorMute.load();
 
     params.hpfEnabled = source.hpfEnabled.load();
     params.hpfHz      = source.hpfHz.load();
@@ -337,6 +351,14 @@ audio::EngineConfig Config::toEngineConfig() const
     engine.output.sampleRate   = output.sampleRate;
     engine.output.channels     = output.channels;
     engine.output.bufferFrames = output.bufferFrames;
+
+    engine.monitor.deviceId     = monitor.deviceId;
+    engine.monitor.backend      = monitor.backend;
+    engine.monitor.wasapiMode   = monitor.wasapiMode;
+    engine.monitor.sampleRate   = monitor.sampleRate;
+    engine.monitor.channels     = monitor.channels;
+    engine.monitor.bufferFrames = monitor.bufferFrames;
+    engine.monitorEnabled       = monitorEnabled;
 
     engine.internalChannels = internalChannels;
     engine.maxBlockFrames   = maxBlockFrames;

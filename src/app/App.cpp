@@ -270,6 +270,14 @@ void App::startEngine()
         return;
     }
 
+    // The monitor gets the same treatment, but its verdict is discarded: it
+    // exists so the operator can hear themselves, and losing that is no reason
+    // to stop sending audio to where it is actually going. What matters here is
+    // the side effect - a monitor that came back under a new identifier is
+    // rebound, exactly like the other two. The engine reports the rest.
+    if (config_.monitorEnabled && !config_.monitor.deviceId.empty())
+        (void)checkSelection(config_.monitor, false);
+
     if (!engine_->start(config_.toEngineConfig())) {
         const auto status = engine_->status();
         startupError_ = !status.inputError.empty() ? ("input: " + status.inputError)
@@ -693,6 +701,11 @@ bool App::deviceSelectionDiffers() const
            a.output.deviceId != b.output.deviceId || a.output.backend != b.output.backend ||
            a.output.wasapiMode != b.output.wasapiMode ||
            a.output.sampleRate != b.output.sampleRate ||
+           a.monitorEnabled != b.monitorEnabled ||
+           a.monitor.deviceId != b.monitor.deviceId ||
+           a.monitor.backend != b.monitor.backend ||
+           a.monitor.wasapiMode != b.monitor.wasapiMode ||
+           a.monitor.sampleRate != b.monitor.sampleRate ||
            a.maxBlockFrames != b.maxBlockFrames || a.internalChannels != b.internalChannels;
 }
 
@@ -700,7 +713,8 @@ bool App::deviceSelectionDiffers() const
 // I/O panel
 // ---------------------------------------------------------------------------
 
-void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isInput)
+void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isInput,
+                               bool allowAsio)
 {
     ImGui::PushID(label);
 
@@ -714,6 +728,8 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##backend", backendName(device.backend))) {
         for (BackendType backend : backends) {
+            if (backend == BackendType::Asio && !allowAsio)
+                continue;
             const bool selected = backend == device.backend;
             if (ImGui::Selectable(backendName(backend), selected) && !selected) {
                 device.backend = backend;
@@ -895,6 +911,87 @@ void App::renderIoPanel()
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Sums the processed signal to mono before it reaches the\n"
                               "output device, so both channels carry the same audio.");
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // --- monitor ----------------------------------------------------------
+    // A virtual cable cannot be listened to - that is what makes it a cable.
+    // This is the second render device that carries the same signal, so the
+    // operator hears what is being sent while it is being sent.
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
+        ImGui::TextUnformatted("Monitor");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+
+        bool enabled = config_.monitorEnabled;
+        if (toggleSwitch("monitorOn", &enabled)) {
+            config_.monitorEnabled = enabled;
+
+            // Picking a device on the spot, for the same reason the backend
+            // switch does: an enabled monitor with nothing selected would ask
+            // for a restart and then fail it.
+            if (enabled && config_.monitor.deviceId.empty()) {
+                const auto list = devices_.outputs(config_.monitor.backend);
+                const auto preferred = std::find_if(
+                    list.begin(), list.end(), [](const audio::DeviceInfo& info) {
+                        return info.isDefault && info.usable() && !info.isVirtualCable;
+                    });
+                if (preferred != list.end()) {
+                    config_.monitor.deviceId   = preferred->id;
+                    config_.monitor.deviceName = preferred->name;
+                    if (preferred->defaultSampleRate > 0)
+                        config_.monitor.sampleRate = preferred->defaultSampleRate;
+                }
+            }
+            markDirty();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "A second output carrying the same processed signal.\n"
+                "Sending to a virtual cable is silent by design; this is how\n"
+                "you hear yourself while it happens.");
+        }
+
+        if (config_.monitorEnabled) {
+            ImGui::Spacing();
+            renderDeviceSelector("Monitor device", config_.monitor, false,
+                                 /*allowAsio=*/false);
+
+            float gainDb = params_.monitorGainDb.load();
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::SliderFloat("##monitorgain", &gainDb, -60.0f, 12.0f, "%+.1f dB")) {
+                params_.monitorGainDb.store(gainDb);
+                markDirty();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Headphone level. Affects only what you hear -\n"
+                                  "the signal being sent onwards is untouched.");
+            }
+
+            bool monitorMuted = params_.monitorMute.load();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+            ImGui::TextUnformatted("mute monitor");
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                 ImGui::GetContentRegionAvail().x - 34);
+            if (toggleSwitch("monitorMute", &monitorMuted)) {
+                params_.monitorMute.store(monitorMuted);
+                markDirty();
+            }
+
+            const auto monitorStatus = engine_->status();
+            if (!monitorStatus.monitorError.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
+                ImGui::TextWrapped("monitor: %s", monitorStatus.monitorError.c_str());
+                ImGui::PopStyleColor();
+            }
         }
     }
 

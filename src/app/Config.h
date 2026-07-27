@@ -37,6 +37,12 @@ struct Config {
     DeviceConfig input;
     DeviceConfig output;
 
+    /// Second render device carrying the same signal, so the operator can hear
+    /// what is being sent into a virtual cable - which is otherwise silent by
+    /// construction.
+    DeviceConfig monitor;
+    bool         monitorEnabled = false;
+
     int  internalChannels = 2;
     int  maxBlockFrames   = 256;
     bool autoStart        = true;
@@ -55,6 +61,9 @@ struct Config {
         float outputGainDb = 0.0f;
         bool  mute      = false;
         bool  bypassAll = false;
+
+        float monitorGainDb = 0.0f;
+        bool  monitorMute   = false;
 
         bool  hpfEnabled = true;
         float hpfHz      = 80.0f;
