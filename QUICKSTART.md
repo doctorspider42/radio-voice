@@ -62,8 +62,15 @@ MSVC — MinGW tu nie wystarczy.
 
 ### Build
 
+Jedno polecenie:
+
+```
+build.cmd
+```
+
+Albo bezpośrednio przez CMake:
+
 ```powershell
-cd F:\Projects\radio-voice
 cmake --preset mingw
 cmake --build --preset mingw
 ```
@@ -73,18 +80,26 @@ Wynik: **`build\bin\RadioVoice.exe`**, ok. 28 MB.
 
 Inne warianty:
 
-```powershell
-cmake --preset msvc          # Visual Studio zamiast MinGW
-cmake --preset mingw-debug   # z symbolami i asercjami
-cmake --preset no-vst3       # bez hosta wtyczek — usuwa jedyną zależność copyleft
+```
+build.cmd debug      z symbolami i asercjami
+build.cmd msvc       Visual Studio zamiast MinGW
+build.cmd no-vst3    bez hosta wtyczek — usuwa jedyną zależność copyleft
 ```
 
-Z obsługą ASIO (SDK trzeba pobrać ręcznie ze strony Steinberga):
+### ASIO
 
-```powershell
-cmake --preset mingw -DRV_ENABLE_ASIO=ON -DRV_ASIO_SDK_DIR=C:/asiosdk
-cmake --build --preset mingw
+Sterowniki ASIO są wykrywane zawsze, ale bez SDK Steinberga wiszą na liście
+wyszarzone. SDK jest nieredystrybuowalne, więc nie ma go w repo i CMake nie
+pobiera go automatycznie tak jak reszty zależności.
+
 ```
+tools\fetch-asio-sdk.cmd
+build.cmd
+```
+
+Pierwsze polecenie ściąga SDK do `third_party\asiosdk` — **uruchomienie go
+oznacza akceptację licencji ASIO SDK Steinberga**, której kopia ląduje obok
+źródeł. Potem CMake znajduje SDK sam, bez żadnych flag.
 
 ### Pierwsze uruchomienie
 
@@ -142,11 +157,25 @@ dwóch restartów.
 > na maszynie wirtualnej albo z debuggerem jądra. `driver/README.md` ma listę
 > miejsc, które najpewniej będą wymagały poprawek.
 
+### Najkrótsza droga
+
+```
+driver\install-driver.cmd
+```
+
+Sam się podnosi do administratora i robi wszystko po kolei: sprawdza tryb
+testowy, buduje, tworzy certyfikat, podpisuje, instaluje. Jeśli tryb testowy
+jest wyłączony — zaproponuje włączenie i poprosi o restart, po którym trzeba
+uruchomić go ponownie (przez restart nie da się przejść w jednym poleceniu).
+
+Odinstalowanie: `driver\uninstall-driver.cmd`.
+
+Poniżej to samo krok po kroku, gdyby coś poszło nie tak.
+
 ### Krok 1 — zbuduj
 
-```powershell
-cd F:\Projects\radio-voice\driver
-.\build.ps1 -Configuration Release
+```
+driver\build.cmd -Configuration Release
 ```
 
 Wynik: `driver\build\Release\RadioVoiceAudio.sys` + `.inf`.
@@ -185,10 +214,9 @@ bcdedit /set testsigning on
 PowerShell **jako administrator** (elewacja jest po to, żeby od razu zaufać
 certyfikatowi):
 
-```powershell
-cd F:\Projects\radio-voice\driver
-.\tools\make-test-cert.ps1
-.\tools\sign.ps1
+```
+driver\tools\make-test-cert.cmd
+driver\tools\sign.cmd
 ```
 
 Żaden z tych skryptów o nic nie pyta. Klucz prywatny zostaje w Twoim magazynie
@@ -199,10 +227,8 @@ załadowało obraz, i `.cat`, żeby PnP przyjął pakiet przy instalacji.
 
 ### Krok 5 — zainstaluj
 
-PowerShell **jako administrator**:
-
-```powershell
-.\tools\install.ps1
+```
+driver\tools\install.cmd
 ```
 
 Weryfikacja:
@@ -298,22 +324,19 @@ Skanowane są standardowe katalogi VST3. Wtyczki 32-bitowe z
 
 ### Sterownik
 
-PowerShell **jako administrator**:
+```
+driver\uninstall-driver.cmd
+```
+
+Usuwa urządzenie, pakiet sterownika i certyfikat testowy. Tryb testowy zostaje
+— to ustawienie całej maszyny, mogło być włączone wcześniej dla czegoś innego.
+Wyłączenie (PowerShell **jako administrator**, potem **restart**):
 
 ```powershell
-cd F:\Projects\radio-voice\driver
-.\tools\uninstall.ps1
 bcdedit /set testsigning off
 ```
 
-➜ **RESTART.** Potem włącz z powrotem Secure Boot w firmware.
-
-Certyfikat testowy usuniesz tak:
-
-```powershell
-Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\TrustedPublisher, Cert:\CurrentUser\My |
-    Where-Object { $_.Subject -eq 'CN=RadioVoice Test Signing' } | Remove-Item -Force
-```
+Potem włącz z powrotem Secure Boot w firmware.
 
 ### Aplikacja
 

@@ -75,14 +75,17 @@ cmake --preset no-vst3       # bez hosta VST3 — usuwa jedyną zależność cop
 
 ### ASIO
 
-SDK Steinberga nie może być redystrybuowane, więc trzeba je pobrać ręcznie
-z <https://www.steinberg.net/developers/> i wskazać:
+SDK Steinberga nie może być redystrybuowane, więc nie ma go w repo i CMake nie
+pobiera go razem z resztą zależności:
 
 ```bash
-cmake --preset mingw -DRV_ENABLE_ASIO=ON -DRV_ASIO_SDK_DIR=C:/asiosdk
+tools\fetch-asio-sdk.cmd
 ```
 
-Bez tego lista urządzeń i tak pokazuje zainstalowane sterowniki ASIO —
+Ląduje w `third_party/asiosdk`, po czym CMake wykrywa je sam — bez flag.
+Uruchomienie skryptu oznacza akceptację licencji ASIO SDK Steinberga.
+
+Bez SDK lista urządzeń i tak pokazuje zainstalowane sterowniki ASIO —
 wyszarzone, z wyjaśnieniem, czego brakuje — zamiast udawać, że ich nie ma.
 
 ---
@@ -162,9 +165,13 @@ Sterownik (`driver/`) kompiluje się i linkuje czysto pod MSVC 19.44 + WDK
 10.0.26100, a cały łańcuch podpisywania — generowanie katalogu przez Inf2Cat i
 podpis `.sys` oraz `.cat` — został przetestowany od początku do końca.
 
+Backend **ASIO** kompiluje się i linkuje (SDK 2.3.3, MinGW), a wykrywanie SDK
+przez CMake i skrypt pobierający są sprawdzone od zera.
+
 Czego **nie** udało się zweryfikować w tym środowisku:
 
-- **ASIO** — SDK wymaga ręcznego pobrania; kod skompilowany nigdy nie był
+- **ASIO w działaniu** — kod się kompiluje i sterowniki są wyliczane, ale
+  strumień przez ASIO nigdy nie był otwarty
 - **WASAPI exclusive** i **DirectSound** — ścieżki napisane, ale nie uruchomione
 - **sterownik w działaniu** — załadowanie wymaga trybu testowego i restartu
   maszyny; nie robiłem tego. Szczegóły i lista miejsc do sprawdzenia w razie

@@ -37,12 +37,17 @@ unavailable. In that configuration nothing copyleft remains.
 
 ### ASIO SDK
 
-The ASIO SDK cannot be redistributed, so it is never downloaded automatically.
-Obtain it from Steinberg and point the build at it:
+The ASIO SDK cannot be redistributed, so it is neither committed here nor
+fetched by CMake alongside the other dependencies. `tools/fetch-asio-sdk.cmd`
+downloads it into `third_party/asiosdk`, which is git-ignored; running that
+script accepts Steinberg's ASIO SDK Licensing Agreement, and a copy of the
+agreement is placed next to the sources.
 
-```
-cmake -B build -DRV_ENABLE_ASIO=ON -DRV_ASIO_SDK_DIR=C:/path/to/asiosdk
-```
+CMake picks the SDK up from there automatically. A build without it simply has
+no ASIO backend.
+
+Note that distributing a binary built against the ASIO SDK carries obligations
+under that agreement - read it before shipping one.
 
 ASIO is a trademark and software of Steinberg Media Technologies GmbH.
 

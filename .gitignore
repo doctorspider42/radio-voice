@@ -1,5 +1,9 @@
 build/
 out/
+
+# The ASIO SDK is downloaded here, never committed: Steinberg's licence forbids
+# redistributing it. tools/fetch-asio-sdk.cmd puts it in place.
+third_party/
 .vs/
 .vscode/
 .idea/

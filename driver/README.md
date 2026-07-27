@@ -46,10 +46,27 @@ Instalacje SDK i WDK są maszynowe, więc wyskoczy UAC.
 
 ---
 
+## Wszystko naraz
+
+```
+install-driver.cmd
+```
+
+Podnosi się do administratora i wykonuje po kolei: sprawdzenie trybu testowego,
+build, certyfikat, podpis, instalację. Reszta tego pliku opisuje te kroki
+osobno — przydaje się, gdy coś pójdzie nie tak.
+
+Odinstalowanie: `uninstall-driver.cmd`.
+
 ## Budowanie
 
+```
+build.cmd -Configuration Release
+```
+
+albo bezpośrednio:
+
 ```powershell
-cd driver
 .\build.ps1 -Configuration Release
 ```
 

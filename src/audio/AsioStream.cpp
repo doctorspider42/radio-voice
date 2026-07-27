@@ -15,6 +15,14 @@
 #include <cmath>
 #include <cstring>
 
+// asiosys.h must come first. asio.h contains no #include directives at all and
+// relies on the host having pulled in the platform detection beforehand;
+// without it IEEE754_64FLOAT is undefined, and ASIOSampleRate silently becomes
+// a 10-byte extended-float placeholder struct instead of a double. Every
+// sample-rate call then fails to compile, pointing at this file rather than at
+// the missing include.
+#include "asiosys.h"
+
 #include "asio.h"
 #include "asiodrivers.h"
 

@@ -10,12 +10,27 @@ project(RadioVoice
 # ---------------------------------------------------------------------------
 option(RV_ENABLE_VST3   "Build the VST3 plugin host"                    ON)
 option(RV_FETCH_VST3    "Download the VST3 SDK sources automatically"   ON)
-option(RV_ENABLE_ASIO   "Build the ASIO backend (needs the ASIO SDK)"   OFF)
 
 set(RV_VST3_SDK_DIR "" CACHE PATH
     "Root of a local VST3 SDK checkout (used when RV_FETCH_VST3=OFF)")
 set(RV_ASIO_SDK_DIR "" CACHE PATH
     "Root of the Steinberg ASIO SDK (contains common/ and host/)")
+
+# The ASIO SDK cannot be redistributed, so it is never fetched automatically and
+# never lives in the repository. If it has been placed in the conventional spot
+# - which tools/fetch-asio-sdk does - pick it up without the user having to say
+# so twice. Nothing about ASIO changes for anyone who has not put it there.
+set(_rv_bundled_asio ${CMAKE_CURRENT_SOURCE_DIR}/third_party/asiosdk)
+if(NOT RV_ASIO_SDK_DIR AND EXISTS ${_rv_bundled_asio}/common/asio.h)
+    set(RV_ASIO_SDK_DIR ${_rv_bundled_asio} CACHE PATH "" FORCE)
+    message(STATUS "ASIO SDK found at ${_rv_bundled_asio}")
+endif()
+
+if(EXISTS ${RV_ASIO_SDK_DIR}/common/asio.h)
+    option(RV_ENABLE_ASIO "Build the ASIO backend (needs the ASIO SDK)" ON)
+else()
+    option(RV_ENABLE_ASIO "Build the ASIO backend (needs the ASIO SDK)" OFF)
+endif()
 
 if(NOT WIN32)
     message(FATAL_ERROR "RadioVoice targets Windows only.")
