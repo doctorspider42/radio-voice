@@ -39,6 +39,16 @@ void statusPill(const char* text, ImU32 colour);
 /// that changes the signal path.
 bool toggleSwitch(const char* id, bool* value);
 
+/// Square button carrying a drawn cog, for the options menu.
+///
+/// The cog is drawn rather than typed: the interface font is loaded with the
+/// Latin ranges only, and U+2699 is not among them. `tint` colours it - the
+/// caller uses that to carry a warning through a button with no room for text.
+/// `lit` keeps the button looking pressed while its menu is open.
+///
+/// Returns true on the frame it was clicked.
+bool gearButton(const char* id, float size, ImU32 tint, bool lit = false);
+
 /// Right-aligned dim caption on the current line.
 void rightLabel(const char* text, ImU32 colour);
 

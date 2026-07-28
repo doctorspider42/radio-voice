@@ -9,6 +9,16 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.2.3] — 2026-07-28
+
+### Changed
+
+- The **Log** and **Tray** buttons have left the top bar for a cog beside
+  Restart. Both were settings, not transport, and the bar you glance at while
+  talking is the wrong place for them. The cog turns amber when something has
+  gone into the log, so the one thing those buttons were doing at a distance is
+  still done.
+
 ## [0.2.2] — 2026-07-28
 
 ### Added
