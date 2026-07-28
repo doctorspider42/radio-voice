@@ -52,8 +52,9 @@ struct Config {
     int windowWidth  = 1360;
     int windowHeight = 840;
 
-    /// Whether the processing chain is folded away to a narrow strip.
+    /// Whether the side panels are folded away to a narrow strip.
     bool chainCollapsed = false;
+    bool ioCollapsed    = false;
 
     /// Values of every knob, stored flat.
     struct ParamValues {

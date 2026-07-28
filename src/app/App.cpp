@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include "core/Log.h"
+#include "core/Paths.h"
 #include "core/Strings.h"
 #include "dsp/Compressor.h"
 #include "dsp/GraphicEq.h"
@@ -500,7 +501,13 @@ void App::render()
     // nothing on a smaller window - which is where the EQ and the dynamics
     // panels live, so it is the worst place to lose room.
     const float totalWidth = ImGui::GetContentRegionAvail().x;
-    const float leftWidth  = std::clamp(totalWidth * 0.23f, 250.0f, 340.0f);
+
+    // Same treatment as the chain, mirrored: once the devices are set they are
+    // rarely touched again, so the column holding them is worth reclaiming
+    // while working on the sound.
+    const float leftWidth = config_.ioCollapsed
+                                ? 34.0f
+                                : std::clamp(totalWidth * 0.23f, 250.0f, 340.0f);
 
     // Folded away, the chain keeps just enough width for the button that brings
     // it back; everything it gives up goes to the centre column.
@@ -1013,9 +1020,62 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
 
 void App::renderIoPanel()
 {
+    // ---- folded away -----------------------------------------------------
+    if (config_.ioCollapsed) {
+        const float strip = ImGui::GetContentRegionAvail().x;
+
+        if (ImGui::Button(">", ImVec2(-1.0f, 0.0f))) {
+            config_.ioCollapsed = false;
+            markDirty();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Show the audio devices");
+
+        ImGui::Spacing();
+
+        ImGui::PushFont(fonts_.small, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        for (const char* c = "AUDIO"; *c; ++c) {
+            const char letter[2] = {*c, '\0'};
+            const float width = ImGui::CalcTextSize(letter).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - width) * 0.5f);
+            ImGui::TextUnformatted(letter);
+        }
+        ImGui::PopStyleColor();
+
+        // The one fact worth keeping visible while the panel is away: what rate
+        // the stream actually negotiated. It is the number that explains a
+        // surprise, and it is two characters wide.
+        const auto status = engine_->status();
+        if (status.running && status.outputSampleRate > 0.0) {
+            ImGui::Spacing();
+            char rate[8];
+            std::snprintf(rate, sizeof(rate), "%.0fk", status.outputSampleRate / 1000.0);
+            const float rateWidth = ImGui::CalcTextSize(rate).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - rateWidth) * 0.5f);
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kAccent));
+            ImGui::TextUnformatted(rate);
+            ImGui::PopStyleColor();
+        }
+        ImGui::PopFont();
+
+        return;
+    }
+
+    // ---- expanded --------------------------------------------------------
     ImGui::PushFont(fonts_.medium, 0.0f);
     ImGui::TextUnformatted("Audio I/O");
     ImGui::PopFont();
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 24);
+    if (ImGui::Button("<", ImVec2(24, 0))) {
+        config_.ioCollapsed = true;
+        markDirty();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Fold the audio devices away");
+
     ImGui::Spacing();
 
     renderDeviceSelector("Microphone", config_.input, true);
@@ -1939,6 +1999,85 @@ void App::renderTransportBar()
 // Plugin browser
 // ---------------------------------------------------------------------------
 
+void App::renderScanFolders()
+{
+    if (!ImGui::CollapsingHeader("Scan folders"))
+        return;
+
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+    ImGui::TextWrapped(
+        "The standard VST3 locations are always searched. Add folders here for "
+        "plugins kept elsewhere - another drive, a portable collection, a "
+        "network share.");
+    ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+
+    // The built-in locations are shown, not just implied. Someone whose plugins
+    // are missing needs to know where the scanner already looked before being
+    // asked to add somewhere else.
+    for (const auto& dir : paths::defaultVst3Directories()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        ImGui::Bullet();
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", toUtf8(dir.wstring()).c_str());
+        ImGui::PopStyleColor();
+    }
+
+    auto extras = scanner_.extraDirectories();
+    bool changed = false;
+
+    for (size_t i = 0; i < extras.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+
+        if (ImGui::SmallButton("x")) {
+            extras.erase(extras.begin() + static_cast<ptrdiff_t>(i));
+            changed = true;
+            ImGui::PopID();
+            break;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Stop searching this folder");
+
+        ImGui::SameLine();
+
+        // A folder that has gone away - an unplugged drive, a share that is
+        // down - is worth flagging rather than quietly scanning nothing.
+        const bool exists = std::filesystem::exists(std::filesystem::path(toWide(extras[i])));
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              theme::toVec4(exists ? theme::kText : theme::kWarning));
+        ImGui::TextWrapped("%s", extras[i].c_str());
+        ImGui::PopStyleColor();
+        if (!exists && ImGui::IsItemHovered())
+            ImGui::SetTooltip("This folder is not reachable right now");
+
+        ImGui::PopID();
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::Button("Add folder...")) {
+        const auto chosen = paths::pickDirectory(mainWindow_, L"Folder with VST3 plugins");
+        if (!chosen.empty()) {
+            const std::string text = toUtf8(chosen.wstring());
+            if (std::find(extras.begin(), extras.end(), text) == extras.end()) {
+                extras.push_back(text);
+                changed = true;
+            }
+        }
+    }
+
+    if (changed) {
+        scanner_.setExtraDirectories(extras);
+
+        // Scanned straight away rather than waiting for a Rescan click. Adding
+        // a folder is only ever asked for because something in it is wanted
+        // now, and a list that stays empty until a second, undiscovered button
+        // is pressed reads as the feature not working.
+        scanner_.startScan({}, /*full=*/false);
+    }
+}
+
 void App::renderPluginBrowser()
 {
     ImGui::SetNextWindowSize(ImVec2(680, 520), ImGuiCond_FirstUseEver);
@@ -1964,6 +2103,8 @@ void App::renderPluginBrowser()
         ImGui::SameLine();
         ImGui::TextDisabled("VST3 folders are scanned automatically at start-up");
     }
+
+    renderScanFolders();
 
     ImGui::Separator();
 

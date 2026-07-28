@@ -54,6 +54,10 @@ private:
     void renderChainPanel();
     void renderTransportBar();
     void renderPluginBrowser();
+
+    /// Where the scanner looks: the built-in locations, and whatever the user
+    /// added on top of them.
+    void renderScanFolders();
     void renderPluginParameters();
     void renderLogWindow();
 

@@ -81,6 +81,7 @@ Config Config::load()
     config.windowWidth      = root.value("windowWidth", config.windowWidth);
     config.windowHeight     = root.value("windowHeight", config.windowHeight);
     config.chainCollapsed   = root.value("chainCollapsed", config.chainCollapsed);
+    config.ioCollapsed      = root.value("ioCollapsed", config.ioCollapsed);
 
     if (root.contains("params")) {
         const json& p = root["params"];
@@ -171,6 +172,7 @@ void Config::save() const
     root["windowWidth"]      = windowWidth;
     root["windowHeight"]     = windowHeight;
     root["chainCollapsed"]   = chainCollapsed;
+    root["ioCollapsed"]      = ioCollapsed;
 
     json p;
     p["inputGainDb"]  = params.inputGainDb;

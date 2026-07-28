@@ -26,6 +26,48 @@ fs::path knownFolder(REFKNOWNFOLDERID id)
 
 } // namespace
 
+fs::path pickDirectory(void* ownerWindow, const wchar_t* title)
+{
+    // COM is already up on the UI thread, but say so explicitly: this is called
+    // from a menu handler that has no idea what initialised what, and a failed
+    // CoInitializeEx here is not an error - it means somebody got there first.
+    const HRESULT comStatus = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool comOwned = SUCCEEDED(comStatus);
+
+    fs::path result;
+    IFileOpenDialog* dialog = nullptr;
+
+    if (SUCCEEDED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                     IID_PPV_ARGS(&dialog)))) {
+        DWORD options = 0;
+        if (SUCCEEDED(dialog->GetOptions(&options)))
+            dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST |
+                               FOS_FORCEFILESYSTEM);
+
+        if (title)
+            dialog->SetTitle(title);
+
+        if (SUCCEEDED(dialog->Show(static_cast<HWND>(ownerWindow)))) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&item)) && item) {
+                PWSTR raw = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &raw)) && raw) {
+                    result = fs::path(raw);
+                    ::CoTaskMemFree(raw);
+                }
+                item->Release();
+            }
+        }
+
+        dialog->Release();
+    }
+
+    if (comOwned)
+        ::CoUninitialize();
+
+    return result;
+}
+
 const fs::path& dataDir()
 {
     // Resolved once: the folder is fixed for the process lifetime and creating

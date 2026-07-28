@@ -17,4 +17,12 @@ std::filesystem::path logFile();
 /// per-user first, then machine-wide.
 std::vector<std::filesystem::path> defaultVst3Directories();
 
+/// Shows the system folder picker. Returns an empty path when cancelled.
+///
+/// The shell dialog rather than a hand-rolled tree: it already knows about
+/// mapped drives, network locations, junctions and the places a user actually
+/// keeps things, and typing a path by hand is how a trailing space becomes a
+/// folder that silently contains no plugins.
+std::filesystem::path pickDirectory(void* ownerWindow, const wchar_t* title);
+
 } // namespace rv::paths
