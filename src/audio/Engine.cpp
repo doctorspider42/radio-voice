@@ -127,16 +127,28 @@ void Engine::stop()
     status_.monitorRunning = false;
 }
 
-void Engine::closeStreams()
+void Engine::closeMonitor()
 {
-    // Monitor first, and the flag before the stream: the main output thread
-    // reads it to decide whether to fill the monitor ring, and a stopped
-    // consumer with a live producer would just fill the ring and wedge.
+    // The flag goes down before the stream does, and that order is the whole
+    // safety argument for stopping a monitor while audio is playing. The output
+    // thread reads it to decide whether to fill the ring; once it is false, no
+    // further block touches the ring, and stop() then joins the consumer. The
+    // ring itself outlives both - it is a member - so a write already in
+    // progress simply finishes.
     monitorActive_.store(false, std::memory_order_release);
+
     if (monitor_)
         monitor_->stop();
     monitor_ = nullptr;
     ownedMonitor_.reset();
+
+    std::lock_guard lock(statusMutex_);
+    status_.monitorRunning = false;
+}
+
+void Engine::closeStreams()
+{
+    closeMonitor();
 
     // Render next: it is the side that pulls, so stopping it guarantees no
     // further calls into the chain while capture is torn down.
@@ -244,10 +256,50 @@ void Engine::MonitorTap::produce(float* interleaved, int channels, int frames)
     }
 }
 
+bool Engine::applyMonitor(const StreamConfig& device, bool enabled)
+{
+    config_.monitor        = device;
+    config_.monitorEnabled = enabled;
+
+    // Nothing to open yet - openStreams will pick this up when the engine
+    // starts. Storing it is the whole job.
+    if (!running_.load(std::memory_order_acquire)) {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError.clear();
+        return true;
+    }
+
+    closeMonitor();
+
+    {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError.clear();
+    }
+
+    if (!enabled || device.deviceId.empty())
+        return true;
+
+    double outputRate     = 0.0;
+    int    outputChannels = 0;
+    {
+        std::lock_guard lock(statusMutex_);
+        outputRate     = status_.outputSampleRate;
+        outputChannels = status_.outputChannels;
+    }
+
+    return openMonitor(outputRate, outputChannels);
+}
+
 bool Engine::openMonitor(double sourceRate, int sourceChannels)
 {
     if (!config_.monitorEnabled || config_.monitor.deviceId.empty())
         return true;
+
+    if (sourceRate <= 0.0 || sourceChannels <= 0) {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError = "the main output is not running, so there is nothing to monitor";
+        return false;
+    }
 
     // ASIO is deliberately excluded. Its drivers are usually exclusive to one
     // device, and a second ASIO stream would either fail to open or seize the

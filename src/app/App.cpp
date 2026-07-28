@@ -104,6 +104,16 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, Config loaded)
         }
     }
 
+    if (config_.monitorEnabled)
+        ensureMonitorDevice();
+
+    // Recorded before the engine starts, because startEngine opens the monitor
+    // from this same configuration. Leaving it unset would make the first
+    // syncMonitor see a change that has already been applied and close and
+    // reopen a device that was working.
+    appliedMonitor_        = config_.monitor;
+    appliedMonitorEnabled_ = config_.monitorEnabled;
+
     buildChainFromConfig();
 
     if (config_.autoStart && !config_.output.deviceId.empty())
@@ -462,6 +472,11 @@ void App::render()
         engine_->updateSlowMeters();
     engine_->chain().collectGarbage();
 
+    // Both act on what the widgets left in config_ last frame, so they run
+    // before anything is drawn again.
+    syncMonitor();
+    applyPendingDeviceChange();
+
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -622,6 +637,7 @@ void App::renderTopBar()
 
     // Right-aligned controls.
     {
+        const float monitorWidth = 92.0f;
         const float buttonWidth  = 84.0f;
         const float restartWidth = 84.0f;
         const float logWidth     = 62.0f;
@@ -629,8 +645,59 @@ void App::renderTopBar()
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
-                             buttonWidth - restartWidth - logWidth - spacing * 2);
+                             monitorWidth - buttonWidth - restartWidth - logWidth -
+                             spacing * 3);
 
+        // Monitoring is the one routing decision an operator changes mid-take -
+        // headphones on to check a plugin, off again when it feeds back - so it
+        // belongs next to Start rather than three sections down the panel.
+        {
+            const auto status = engine_->status();
+            const bool lit    = config_.monitorEnabled;
+            const bool failed = lit && running && !status.monitorError.empty();
+
+            // Lit when monitoring, red when it was asked for and could not be
+            // opened. An unlit button keeps the default style rather than a
+            // third colour, so "on" is the only state that draws the eye.
+            int pushed = 0;
+            if (failed) {
+                ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kDanger));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toVec4(theme::kDanger));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::toVec4(theme::kDanger));
+                pushed = 3;
+            } else if (lit) {
+                ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kAccentDim));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toVec4(theme::kAccent));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::toVec4(theme::kAccentFaint));
+                pushed = 3;
+            }
+
+            if (ImGui::Button("Monitor", ImVec2(monitorWidth, 0))) {
+                config_.monitorEnabled = !config_.monitorEnabled;
+                if (config_.monitorEnabled)
+                    ensureMonitorDevice();
+                markDirty();
+            }
+
+            if (pushed)
+                ImGui::PopStyleColor(pushed);
+
+            if (ImGui::IsItemHovered()) {
+                if (failed) {
+                    ImGui::SetTooltip("Monitoring is on but the device could not be "
+                                      "opened:\n%s", status.monitorError.c_str());
+                } else if (config_.monitor.deviceName.empty()) {
+                    ImGui::SetTooltip("Hear the processed signal on a second device.\n"
+                                      "Pick one under Audio I/O.");
+                } else {
+                    ImGui::SetTooltip("Hear the processed signal on \"%s\".\n"
+                                      "Takes effect immediately - no restart.",
+                                      config_.monitor.deviceName.c_str());
+                }
+            }
+        }
+
+        ImGui::SameLine();
         if (ImGui::Button(running ? "Stop" : "Start", ImVec2(buttonWidth, 0))) {
             if (running)
                 stopEngine();
@@ -683,12 +750,102 @@ void App::renderTopBar()
     }
 
     if (running && deviceSelectionDiffers()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-        ImGui::TextUnformatted("Device settings changed - press Restart to apply them.");
+        // Reports rather than instructs: the restart is already on its way, and
+        // asking for a click that is about to become unnecessary is worse than
+        // saying nothing. Kept visible because the stream does drop out for a
+        // moment, and unexplained silence is alarming.
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
+        ImGui::TextUnformatted("Device settings changed - reopening the stream...");
         ImGui::PopStyleColor();
     }
 
     ImGui::Separator();
+}
+
+void App::ensureMonitorDevice()
+{
+    if (!config_.monitor.deviceId.empty())
+        return;
+
+    const auto list = devices_.outputs(config_.monitor.backend);
+
+    auto acceptable = [](const audio::DeviceInfo& info) {
+        // Never a virtual cable: routing the monitor into another cable is
+        // silence, which is exactly the situation being escaped.
+        return info.usable() && !info.isVirtualCable;
+    };
+
+    const audio::DeviceInfo* chosen = nullptr;
+    for (const auto& info : list) {
+        if (acceptable(info) && info.isDefault) {
+            chosen = &info;
+            break;
+        }
+    }
+    if (!chosen) {
+        for (const auto& info : list) {
+            if (acceptable(info)) {
+                chosen = &info;
+                break;
+            }
+        }
+    }
+
+    if (!chosen)
+        return;
+
+    config_.monitor.deviceId   = chosen->id;
+    config_.monitor.deviceName = chosen->name;
+    if (chosen->defaultSampleRate > 0)
+        config_.monitor.sampleRate = chosen->defaultSampleRate;
+}
+
+void App::syncMonitor()
+{
+    const auto& m = config_.monitor;
+    const auto& a = appliedMonitor_;
+
+    const bool changed = config_.monitorEnabled != appliedMonitorEnabled_ ||
+                         m.deviceId != a.deviceId || m.backend != a.backend ||
+                         m.wasapiMode != a.wasapiMode || m.sampleRate != a.sampleRate;
+    if (!changed)
+        return;
+
+    appliedMonitor_        = m;
+    appliedMonitorEnabled_ = config_.monitorEnabled;
+
+    audio::StreamConfig stream;
+    stream.deviceId     = m.deviceId;
+    stream.backend      = m.backend;
+    stream.wasapiMode   = m.wasapiMode;
+    stream.sampleRate   = m.sampleRate;
+    stream.channels     = m.channels;
+    stream.bufferFrames = m.bufferFrames;
+
+    engine_->applyMonitor(stream, config_.monitorEnabled);
+}
+
+void App::applyPendingDeviceChange()
+{
+    if (!engine_->isRunning() || !deviceSelectionDiffers()) {
+        deviceChangeSeenAt_ = -1.0;
+        return;
+    }
+
+    const double now = ImGui::GetTime();
+    if (deviceChangeSeenAt_ < 0.0) {
+        deviceChangeSeenAt_ = now;
+        return;
+    }
+
+    // Long enough that a backend switch and the device choice that follows it
+    // count as one change, short enough to feel automatic.
+    constexpr double kSettleSeconds = 0.5;
+    if (now - deviceChangeSeenAt_ < kSettleSeconds)
+        return;
+
+    deviceChangeSeenAt_ = -1.0;
+    restartEngine();
 }
 
 bool App::deviceSelectionDiffers() const
@@ -701,12 +858,11 @@ bool App::deviceSelectionDiffers() const
            a.output.deviceId != b.output.deviceId || a.output.backend != b.output.backend ||
            a.output.wasapiMode != b.output.wasapiMode ||
            a.output.sampleRate != b.output.sampleRate ||
-           a.monitorEnabled != b.monitorEnabled ||
-           a.monitor.deviceId != b.monitor.deviceId ||
-           a.monitor.backend != b.monitor.backend ||
-           a.monitor.wasapiMode != b.monitor.wasapiMode ||
-           a.monitor.sampleRate != b.monitor.sampleRate ||
            a.maxBlockFrames != b.maxBlockFrames || a.internalChannels != b.internalChannels;
+
+    // The monitor is deliberately absent. It is applied live by syncMonitor,
+    // so listing it here would raise a restart prompt for a change that has
+    // already taken effect.
 }
 
 // ---------------------------------------------------------------------------
@@ -932,30 +1088,16 @@ void App::renderIoPanel()
         bool enabled = config_.monitorEnabled;
         if (toggleSwitch("monitorOn", &enabled)) {
             config_.monitorEnabled = enabled;
-
-            // Picking a device on the spot, for the same reason the backend
-            // switch does: an enabled monitor with nothing selected would ask
-            // for a restart and then fail it.
-            if (enabled && config_.monitor.deviceId.empty()) {
-                const auto list = devices_.outputs(config_.monitor.backend);
-                const auto preferred = std::find_if(
-                    list.begin(), list.end(), [](const audio::DeviceInfo& info) {
-                        return info.isDefault && info.usable() && !info.isVirtualCable;
-                    });
-                if (preferred != list.end()) {
-                    config_.monitor.deviceId   = preferred->id;
-                    config_.monitor.deviceName = preferred->name;
-                    if (preferred->defaultSampleRate > 0)
-                        config_.monitor.sampleRate = preferred->defaultSampleRate;
-                }
-            }
+            if (enabled)
+                ensureMonitorDevice();
             markDirty();
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(
                 "A second output carrying the same processed signal.\n"
                 "Sending to a virtual cable is silent by design; this is how\n"
-                "you hear yourself while it happens.");
+                "you hear yourself while it happens.\n"
+                "Starts and stops immediately - the main path is untouched.");
         }
 
         if (config_.monitorEnabled) {

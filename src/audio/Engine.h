@@ -93,6 +93,17 @@ public:
     /// Restarts with the current configuration - used after a device change.
     bool restart();
 
+    /// Starts, stops or re-points the monitor on a running engine.
+    ///
+    /// Deliberately not part of the restart path. The monitor hangs off the end
+    /// of the output thread and shares nothing with capture, the chain or the
+    /// main render device, so tearing all of that down to add a second pair of
+    /// headphones would drop the audio being sent for no reason at all.
+    ///
+    /// Returns false only when a requested device could not be opened; the
+    /// reason lands in status().monitorError. UI thread only.
+    bool applyMonitor(const StreamConfig& device, bool enabled);
+
     const EngineConfig& config() const { return config_; }
     EngineStatus        status() const;
 
@@ -174,6 +185,7 @@ private:
     bool createStreams();
     bool openStreams();
     bool openMonitor(double sourceRate, int sourceChannels);
+    void closeMonitor();
     void closeStreams();
     void allocateBuffers(double outputSampleRate);
     void processChunk(float* dst, int dstChannels, int frames);

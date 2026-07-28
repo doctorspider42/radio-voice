@@ -58,6 +58,18 @@ private:
     void renderLogWindow();
 
     // --- device helpers ---------------------------------------------------
+    /// Picks a monitor device when none is chosen yet, preferring the system
+    /// default and never a virtual cable - monitoring into another cable is
+    /// silence, which is the problem this feature exists to solve.
+    void ensureMonitorDevice();
+
+    /// Applies a changed monitor selection to the running engine. Called every
+    /// frame; does nothing until something actually moved.
+    void syncMonitor();
+
+    /// Restarts the engine once a changed device selection has settled.
+    void applyPendingDeviceChange();
+
     /// `allowAsio` is false for the monitor: an ASIO driver opens its device
     /// exclusively, so offering it there would let the user pick a backend that
     /// can only contend with the main path.
@@ -99,6 +111,21 @@ private:
     /// The configuration that is actually running, so the UI can tell the user
     /// when a pending change needs a restart.
     Config runningConfig_;
+
+    /// The monitor selection the engine has already been told about. Compared
+    /// against the live config each frame to notice a change without needing
+    /// every widget that can cause one to remember to report it.
+    DeviceConfig appliedMonitor_;
+    bool         appliedMonitorEnabled_ = false;
+
+    /// When the device selection first diverged from what is running, in
+    /// ImGui's clock. Negative when it matches.
+    ///
+    /// The delay before restarting is not politeness. Changing a backend picks
+    /// a device for you, and the user's own choice lands a moment later -
+    /// restarting on the first change would tear the engine down twice and open
+    /// a device nobody asked for in between.
+    double deviceChangeSeenAt_ = -1.0;
 
     void*      mainWindow_ = nullptr;
     gui::Fonts fonts_{};
