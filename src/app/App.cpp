@@ -27,6 +27,11 @@ using namespace rv::gui;
 
 constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
 
+/// Height of one entry in the processing chain. Named because the drag-to-
+/// reorder threshold is derived from it, and the two drifting apart is how a
+/// single gesture starts moving a module by two places.
+constexpr float kChainRowHeight = 62.0f;
+
 /// Draws text, shortened with an ellipsis when it will not fit.
 ///
 /// Needed wherever a name of unknown length shares a row with controls that
@@ -1797,21 +1802,33 @@ void App::renderChainPanel()
         const bool isPlugin = node->kind() == dsp::NodeKind::Vst3Plugin;
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::toVec4(theme::kPanelRaised));
-        ImGui::BeginChild("##item", ImVec2(0, 62), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##item", ImVec2(0, kChainRowHeight), ImGuiChildFlags_Borders);
 
+        // The name is a Selectable purely so it can be grabbed. It was plain
+        // text, and plain text is not an item ImGui tracks - IsItemActive is
+        // never true for it, so the reordering below could not fire at all and
+        // the hint above the list was describing something that did not exist.
         ImGui::PushStyleColor(ImGuiCol_Text,
                               theme::toVec4(bypassed ? theme::kTextFaint : theme::kText));
-        ImGui::TextUnformatted(node->name().c_str());
+        ImGui::Selectable(node->name().c_str(), false, ImGuiSelectableFlags_AllowOverlap);
         ImGui::PopStyleColor();
 
-        // Drag handle covers the label, which is the natural grab target.
-        if (ImGui::IsItemActive() && !ImGui::IsItemHovered()) {
+        if (ImGui::IsItemHovered() && !ImGui::IsItemActive())
+            ImGui::SetTooltip("Drag up or down to move this in the chain");
+
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            // Measured against the row pitch rather than a constant: a swap
+            // should happen when the pointer has travelled roughly as far as
+            // the neighbour it is trading places with, otherwise one gesture
+            // walks the module several positions at once.
+            const float pitch = kChainRowHeight + ImGui::GetStyle().ItemSpacing.y;
             const float delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).y;
-            if (delta < -30.0f && i > 0) {
+
+            if (delta < -pitch * 0.6f && i > 0) {
                 moveFrom = i;
                 moveTo   = i - 1;
                 ImGui::ResetMouseDragDelta();
-            } else if (delta > 30.0f && i + 1 < chainNodes_.size()) {
+            } else if (delta > pitch * 0.6f && i + 1 < chainNodes_.size()) {
                 moveFrom = i;
                 moveTo   = i + 1;
                 ImGui::ResetMouseDragDelta();
@@ -1940,25 +1957,33 @@ void App::renderPluginParameters()
         return;
     }
 
+    // Held locally for the rest of the frame. The close button clears the
+    // member, and everything below dereferences it - reading it again after the
+    // click is a null dereference, which is a crash to the desktop rather than
+    // anything the user could connect to having closed a panel.
+    host::Vst3Plugin* plugin = inspectedPlugin_;
+
     ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted(inspectedPlugin_->name().c_str());
+    ImGui::TextUnformatted(plugin->name().c_str());
     ImGui::PopFont();
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 20);
-    if (ImGui::SmallButton("x"))
+    if (ImGui::SmallButton("x")) {
         inspectedPlugin_ = nullptr;
+        return;
+    }
 
     ImGui::BeginChild("##params", ImVec2(0, 0), ImGuiChildFlags_None);
 
-    const auto& parameters = inspectedPlugin_->parameters();
+    const auto& parameters = plugin->parameters();
     if (parameters.empty())
         ImGui::TextDisabled("this plugin exposes no parameters");
 
     for (const auto& info : parameters) {
         ImGui::PushID(static_cast<int>(info.id));
 
-        float value = static_cast<float>(inspectedPlugin_->parameterValue(info.id));
-        const std::string display = inspectedPlugin_->parameterDisplay(info.id);
+        float value = static_cast<float>(plugin->parameterValue(info.id));
+        const std::string display = plugin->parameterDisplay(info.id);
 
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
         ImGui::TextUnformatted(info.title.c_str());
@@ -1970,11 +1995,11 @@ void App::renderPluginParameters()
 
         ImGui::SetNextItemWidth(-1);
         if (ImGui::SliderFloat("##value", &value, 0.0f, 1.0f, "")) {
-            inspectedPlugin_->setParameterValue(info.id, value);
+            plugin->setParameterValue(info.id, value);
             markDirty();
         }
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            inspectedPlugin_->setParameterValue(info.id, info.defaultNormalized);
+            plugin->setParameterValue(info.id, info.defaultNormalized);
             markDirty();
         }
 
