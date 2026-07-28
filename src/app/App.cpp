@@ -1399,12 +1399,12 @@ void App::renderProcessingPanel()
                                 ImGui::GetStyle().ItemSpacing.y +
                                 ImGui::GetStyle().WindowPadding.y * 2.0f;
 
-    ImGui::BeginChild("##denoise", ImVec2(0, denoiseHeight), ImGuiChildFlags_Borders);
-    renderDenoisePanel();
-    ImGui::EndChild();
-
-    const float eqHeight = ImGui::GetContentRegionAvail().y - dynamicsHeight -
-                           ImGui::GetStyle().ItemSpacing.y;
+    // The equaliser takes what is left once the other two have been accounted
+    // for. Both of their heights are subtracted up front rather than measuring
+    // the remaining space after drawing them, so the order they appear in can
+    // change without the arithmetic quietly following it.
+    const float eqHeight = ImGui::GetContentRegionAvail().y - denoiseHeight -
+                           dynamicsHeight - ImGui::GetStyle().ItemSpacing.y * 2.0f;
 
     ImGui::BeginChild("##eq", ImVec2(0, eqHeight), ImGuiChildFlags_Borders);
     {
@@ -1477,6 +1477,10 @@ void App::renderProcessingPanel()
             ImGui::PopID();
         }
     }
+    ImGui::EndChild();
+
+    ImGui::BeginChild("##denoise", ImVec2(0, denoiseHeight), ImGuiChildFlags_Borders);
+    renderDenoisePanel();
     ImGui::EndChild();
 
     ImGui::BeginChild("##dynamics", ImVec2(0, 0), ImGuiChildFlags_None);
