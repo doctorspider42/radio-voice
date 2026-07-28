@@ -48,6 +48,37 @@ public:
     /// Window size to persist, refreshed by the platform layer.
     void setWindowSize(int width, int height);
 
+    // --- notification area ---------------------------------------------------
+    //
+    // The icon and its menu belong to the platform layer, which is the only
+    // place allowed to touch an HWND. These are what it needs to build the menu
+    // and act on what was chosen.
+    //
+    // All of it is called between frames rather than during one: the menu is
+    // modal, so the render loop is parked while it is up.
+
+    bool trayEnabled() const { return config_.trayEnabled; }
+    bool minimizeToTray() const { return config_.trayEnabled && config_.minimizeToTray; }
+    bool closeToTray() const { return config_.trayEnabled && config_.closeToTray; }
+    bool startMinimized() const { return config_.startMinimized; }
+
+    bool isMuted() const { return params_.mute.load(); }
+    void setMuted(bool muted) { params_.mute.store(muted); markDirty(); }
+
+    bool isEngineRunning() const { return engine_ && engine_->isRunning(); }
+    void toggleEngine();
+
+    void requestExit() { wantsExit_ = true; }
+
+    /// One line for the tray tooltip.
+    std::string trayTooltip() const;
+
+    /// Writes the configuration out immediately instead of at the next frame.
+    /// A window hidden to the tray does not render, so the periodic flush that
+    /// `render` performs never comes round; anything changed from the menu
+    /// would otherwise be lost on a hard shutdown.
+    void saveConfigNow();
+
 private:
     // --- panels -----------------------------------------------------------
     void renderTopBar();
@@ -68,6 +99,9 @@ private:
 
     void renderPluginParameters();
     void renderLogWindow();
+
+    /// Contents of the popup behind the "Tray" button.
+    void renderTrayMenu();
 
     // --- device helpers ---------------------------------------------------
     /// Picks a monitor device when none is chosen yet, preferring the system

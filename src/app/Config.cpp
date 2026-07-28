@@ -83,6 +83,11 @@ Config Config::load()
     config.chainCollapsed   = root.value("chainCollapsed", config.chainCollapsed);
     config.ioCollapsed      = root.value("ioCollapsed", config.ioCollapsed);
 
+    config.trayEnabled    = root.value("trayEnabled", config.trayEnabled);
+    config.minimizeToTray = root.value("minimizeToTray", config.minimizeToTray);
+    config.closeToTray    = root.value("closeToTray", config.closeToTray);
+    config.startMinimized = root.value("startMinimized", config.startMinimized);
+
     if (root.contains("params")) {
         const json& p = root["params"];
         auto& v = config.params;
@@ -176,6 +181,11 @@ void Config::save() const
     root["windowHeight"]     = windowHeight;
     root["chainCollapsed"]   = chainCollapsed;
     root["ioCollapsed"]      = ioCollapsed;
+
+    root["trayEnabled"]    = trayEnabled;
+    root["minimizeToTray"] = minimizeToTray;
+    root["closeToTray"]    = closeToTray;
+    root["startMinimized"] = startMinimized;
 
     json p;
     p["inputGainDb"]  = params.inputGainDb;

@@ -2,6 +2,14 @@
 
 From nothing to a processed microphone in Discord.
 
+> **Not building anything?** Take the installer from
+> [Releases](https://github.com/doctorspider42/radio-voice/releases) and skip to
+> [section 3](#3a-virtual-output--option-a-vb-cable). It installs the
+> application, can start it with Windows, and — if the release was built with
+> the driver payload — offers the virtual cable as well, behind a page that
+> explains what accepting it costs you. Everything below is for building from
+> source.
+
 ---
 
 ## Contents
@@ -68,6 +76,41 @@ take about a minute.
 
 > `driver\build-driver.cmd` is a different thing entirely — it builds the kernel
 > driver, not the application.
+
+### Packaging it
+
+```
+make-installer.cmd
+```
+
+Produces **`dist\RadioVoice-<version>-setup.exe`**. Needs
+[Inno Setup 7](https://jrsoftware.org/isinfo.php):
+
+```powershell
+winget install --id JRSoftware.InnoSetup.7 --exact
+```
+
+The `.7` matters — the plain package is still version 6, which cannot build the
+64-bit installer this script asks for. The two install side by side.
+
+The driver is folded in only if a signed one is already sitting in
+`driver\build` — that is, if you have already been through section 3B on this
+machine. Without it the installer is built without the driver component, which
+is a perfectly good thing to hand to someone who is going to use VB-CABLE.
+
+To build the driver and fold it in, in one command:
+
+```
+make-installer.cmd with-driver
+```
+
+That does the whole of section 3B's build half — compile, certificate, signature
+— and then stages the result into the installer. It elevates itself, so expect a
+UAC prompt, and on a machine that has no signing certificate yet it creates one
+and adds it to the machine's trusted stores. It does **not** install the driver
+here; for that, use `install-driver.cmd`.
+
+[`installer/README.md`](installer/README.md) has the details.
 
 Other variants:
 
@@ -266,7 +309,25 @@ microphone.
 ## 5. Everyday use
 
 RadioVoice has to **keep running** for audio to flow: it is what processes the
-signal and feeds the cable. Closing the window stops the path.
+signal and feeds the cable. By default, closing the window stops the path.
+
+**Out of the way, but still running.** Minimise the window and RadioVoice
+carries on from the notification area; your microphone keeps being processed.
+Click the icon to bring the window back, or right-click it for mute, start/stop
+and exit.
+
+The **Tray** button in the top bar controls the rest:
+
+- *Closing hides the window* — makes the X put RadioVoice away instead of
+  shutting it down. Worth turning on once you have it set up, because closing
+  the window mid-call is otherwise an easy mistake to make.
+- *Start with no window* and *Start with Windows* — together, these mean the
+  microphone is already being processed by the time you join the first call.
+  The installer's "start with Windows" option writes the same entry.
+
+Launching RadioVoice a second time shows the copy already running rather than
+starting another one, so a stray double-click cannot leave two of them fighting
+over the microphone.
 
 A cable is silent by definition, so to hear yourself turn on **Monitor** in the
 top bar and select your headphones under Audio I/O. It starts and stops without
@@ -360,8 +421,14 @@ Then re-enable Secure Boot in the firmware.
 
 ### The application
 
-It installs nothing anywhere — delete the `build` directory and
-`%APPDATA%\RadioVoice`.
+Built from source it installs nothing anywhere — delete the `build` directory
+and `%APPDATA%\RadioVoice`.
+
+Installed from the installer, use *Apps → Installed apps → RadioVoice →
+Uninstall*. That removes the program, the shortcuts and the autostart entry, and
+removes the driver too if it installed one. `%APPDATA%\RadioVoice` is left
+behind on purpose — it holds your chain and your plugin state — so delete it by
+hand if you want it gone.
 
 ### The tools
 

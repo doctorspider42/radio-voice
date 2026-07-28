@@ -146,6 +146,11 @@ the machine store first and falls back to the user one.
 there is no password to invent and remember — a password would protect a file
 sitting next to the thing it protects, which achieves nothing.
 
+On a machine that only *receives* an already-signed package — which is the
+installer's situation — the certificate still has to be trusted, but nothing
+needs creating. `tools\trust-cert.ps1` does that half alone, taking the `.cer`
+and putting it into the same two stores.
+
 A `.pfx` is only useful for moving the certificate to another machine or into
 CI, and is optional:
 
@@ -179,11 +184,22 @@ Two separate steps, easily confused:
 1. `pnputil /add-driver` puts the package into the driver store, which makes it
    *available* but creates nothing.
 2. The device has to be brought into existence separately. There is no hardware
-   to enumerate it, so it is a root-enumerated device and `devcon` must
+   to enumerate it, so it is a root-enumerated device and something must
    explicitly create a node with the ID `root\RadioVoiceAudio`.
 
 Skipping step 2 is the most common reason a virtual driver installs
 "successfully" and no endpoint ever appears.
+
+**Step 2 does not require devcon.** devcon ships only with the WDK, so it is
+used where it exists and `tools\RootDevice.ps1` stands in where it does not,
+making the same SetupAPI calls directly: `SetupDiCreateDeviceInfo`, then
+`SPDRP_HARDWAREID`, then `DIF_REGISTERDEVICE`, then
+`UpdateDriverForPlugAndPlayDevices`. The interop is compiled by `Add-Type`
+against the in-box .NET Framework, so it needs nothing installed. Removal
+likewise falls back from `devcon remove` to `Remove-PnpDevice`.
+
+That is what lets `installer\` ship the driver to a machine that has never seen
+a WDK. On this machine, with the WDK present, nothing changes.
 
 Exit code 3010 from `pnputil` — `ERROR_SUCCESS_REBOOT_REQUIRED` — means the
 package reached the store but the copy already running could not be unloaded.

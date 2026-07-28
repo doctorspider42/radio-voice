@@ -110,29 +110,38 @@ In order of likelihood:
     throw "pnputil failed with exit code $pnputilResult"
 }
 
-$devcon = Find-KitTool 'devcon.exe'
-Write-Host ""
-Write-Host "  devcon: $devcon"
-
 # 'install' creates a new device node every time it is run. On a machine that
 # already has one, that means a second, duplicate cable rather than the updated
 # driver - so an existing device is updated in place instead.
 $existing = Get-PnpDevice -FriendlyName '*RadioVoice*' -ErrorAction SilentlyContinue
 
-if ($existing) {
-    Write-Host "Updating the existing device..."
-    & $devcon update $inf 'root\RadioVoiceAudio'
-} else {
-    Write-Host "Creating the root-enumerated device..."
-    & $devcon install $inf 'root\RadioVoiceAudio'
-}
+# devcon is the obvious tool and the one the WDK documents, but it ships only
+# with the WDK - which a machine running the installer does not have. Where it
+# is present it is used unchanged; where it is not, the same SetupAPI calls are
+# made directly. Neither path is a fallback in the sense of being worse: they
+# do the same four things.
+$devcon = $null
+try { $devcon = Find-KitTool 'devcon.exe' } catch { }
 
-# devcon returns 1 to say the work succeeded but needs a reboot, which is the
-# ordinary outcome when the driver being replaced is currently loaded.
-if ($LASTEXITCODE -eq 1) {
-    $script:rebootRequired = $true
-} elseif ($LASTEXITCODE -ne 0) {
-    throw @"
+Write-Host ""
+
+if ($devcon) {
+    Write-Host "  devcon: $devcon"
+
+    if ($existing) {
+        Write-Host "Updating the existing device..."
+        & $devcon update $inf 'root\RadioVoiceAudio'
+    } else {
+        Write-Host "Creating the root-enumerated device..."
+        & $devcon install $inf 'root\RadioVoiceAudio'
+    }
+
+    # devcon returns 1 to say the work succeeded but needs a reboot, which is
+    # the ordinary outcome when the driver being replaced is currently loaded.
+    if ($LASTEXITCODE -eq 1) {
+        $script:rebootRequired = $true
+    } elseif ($LASTEXITCODE -ne 0) {
+        throw @"
 devcon failed with exit code $LASTEXITCODE.
 
 If the package installed but the device could not be created, the equivalent
@@ -140,6 +149,31 @@ manual route is Device Manager -> Action -> Add legacy hardware -> Install the
 hardware that I manually select -> Sound, video and game controllers -> Have
 Disk -> point at RadioVoiceAudio.inf.
 "@
+    }
+} else {
+    Write-Host "  devcon: not present (no WDK); using SetupAPI directly"
+    . (Join-Path $toolsRoot 'RootDevice.ps1')
+
+    try {
+        if ($existing) {
+            Write-Host "Updating the existing device..."
+            $needsReboot = Install-RootDevice -InfPath $inf -Update
+        } else {
+            Write-Host "Creating the root-enumerated device..."
+            $needsReboot = Install-RootDevice -InfPath $inf
+        }
+    } catch {
+        throw @"
+Could not create the device: $($_.Exception.Message)
+
+If the package installed but the device could not be created, the equivalent
+manual route is Device Manager -> Action -> Add legacy hardware -> Install the
+hardware that I manually select -> Sound, video and game controllers -> Have
+Disk -> point at RadioVoiceAudio.inf.
+"@
+    }
+
+    if ($needsReboot) { $script:rebootRequired = $true }
 }
 
 Write-Host ""

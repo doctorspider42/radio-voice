@@ -1,5 +1,11 @@
 build/
+build-*/
 out/
+
+# Installer output, and the driver package staged into it. Both are build
+# products: the payload is copied out of driver/build by installer/stage-driver.
+dist/
+installer/payload/
 
 # third_party/asiosdk IS committed - see NOTICE.md. Anything else that lands
 # under third_party/ is a working copy of something fetched, and is not.

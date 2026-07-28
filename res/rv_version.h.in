@@ -1,0 +1,16 @@
+// Generated from res/rv_version.h.in - do not edit the copy in the build tree.
+//
+// Exists so that the resource compiler can be given the version without it
+// being written down a second time. The single source is the VERSION file at
+// the repository root; CMake reads it and substitutes here.
+
+#pragma once
+
+#define RV_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define RV_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define RV_VERSION_PATCH @PROJECT_VERSION_PATCH@
+
+// VERSIONINFO wants four comma-separated numbers rather than a string. The
+// fourth field is the build number, which this project does not use.
+#define RV_VERSION_COMMA @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+#define RV_VERSION_TEXT  "@PROJECT_VERSION@.0"

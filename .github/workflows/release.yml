@@ -1,0 +1,203 @@
+# Builds the installer on every push to main, and publishes it as a release.
+#
+# The version comes from the VERSION file, never from this workflow. A push
+# whose version already has a tag still builds - the artifact is uploaded and
+# can be downloaded from the run - it just does not publish a second release
+# over the first. Bumping VERSION is what turns a push into a release, which is
+# why CLAUDE.md asks for it on every change.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Matches the ids in driver/README.md, so the two cannot drift apart.
+  WDK_VERSION: "10.0.26100"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The driver, which is optional in every sense: the installer is perfectly
+  # usable without it, and this job is allowed to fail without taking the
+  # release with it.
+  #
+  # It is separate rather than inline because installing the WDK takes minutes
+  # and is the least reliable thing here - a runner image change breaks this and
+  # nothing else.
+  # ---------------------------------------------------------------------------
+  driver:
+    name: Driver (best effort)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Windows SDK and WDK
+        run: |
+          winget install --id Microsoft.WindowsSDK.${{ env.WDK_VERSION }} --exact `
+            --accept-source-agreements --accept-package-agreements --disable-interactivity
+          winget install --id Microsoft.WindowsWDK.${{ env.WDK_VERSION }} --exact `
+            --accept-source-agreements --accept-package-agreements --disable-interactivity
+
+      - name: Build
+        run: .\driver\build.ps1 -Configuration Release
+
+      # The certificate is generated here and thrown away with the runner. What
+      # reaches the user is only the public .cer, and the key that signed it no
+      # longer exists anywhere by the time they install it.
+      #
+      # This is still a certificate the user's machine is asked to trust, which
+      # is why the installer stops and says so in as many words.
+      - name: Create a signing certificate
+        run: .\driver\tools\make-test-cert.ps1
+
+      - name: Sign
+        run: .\driver\tools\sign.ps1
+
+      - name: Stage the payload
+        run: .\installer\stage-driver.ps1 -Configuration Release -Clean
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver-payload
+          path: installer/payload/driver
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # The application and the installer. This one is not allowed to fail.
+  # ---------------------------------------------------------------------------
+  installer:
+    name: Installer
+    runs-on: windows-latest
+    needs: driver
+    # `always()` so that a failed driver job produces an application-only
+    # installer instead of no installer at all.
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION does not hold a semantic version: '$version'"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version"    >> $env:GITHUB_OUTPUT
+
+      # MinGW, which is what build.cmd defaults to and the only toolchain the
+      # dependencies currently build under - the msvc preset does not survive
+      # rnnoise's SSE4.1 flags or the VST3 SDK's char8_t usage. Releasing with
+      # the same compiler the project is developed with is the right default
+      # anyway; a release should not be the first time a toolchain is tried.
+      - name: Install the toolchain
+        run: choco install mingw ninja --no-progress --yes
+
+      - name: Build the application
+        run: .\build.cmd
+
+      # Optional, and absent whenever the driver job did not finish.
+      - name: Fetch the driver payload
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: driver-payload
+          path: installer/payload/driver
+
+      # winget, not choco: the Chocolatey `innosetup` package is still 6.x, and
+      # the script needs 7 for SetupArchitecture=x64.
+      - name: Install Inno Setup 7
+        run: |
+          winget install --id JRSoftware.InnoSetup.7 --exact `
+            --accept-source-agreements --accept-package-agreements --disable-interactivity
+
+      # build\bin is where the .iss looks by default, so there is nothing to
+      # pass here.
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'build\bin\RadioVoice.exe')) {
+            throw "build\bin\RadioVoice.exe not found - the build step produced nothing"
+          }
+
+          # Where ISCC lands depends on how Inno Setup was installed, and a
+          # runner image change is enough to move it. Version 7 only - a 6 found
+          # here would fail on SetupArchitecture with a less obvious message.
+          $candidates = @(
+            "${env:ProgramFiles}\Inno Setup 7\ISCC.exe"
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe"
+            "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 7's ISCC.exe not found in: $($candidates -join '; ')" }
+
+          & $iscc installer\RadioVoice.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadioVoice-${{ steps.version.outputs.version }}-setup
+          path: dist/*.exe
+          if-no-files-found: error
+
+      # The section of CHANGELOG.md for this version, verbatim. An empty one is
+      # a mistake worth stopping for: a release with no notes is a release
+      # nobody can evaluate.
+      - name: Extract the release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          # Explicit, so that the accented characters in the notes survive
+          # whatever the runner's default happens to be.
+          $lines = Get-Content CHANGELOG.md -Encoding utf8
+          $start = $null
+          $notes = @()
+
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^##\s*\[$([regex]::Escape($version))\]") { $start = $i + 1; continue }
+            if ($null -ne $start -and $lines[$i] -match '^##\s*\[') { break }
+            if ($null -ne $start) { $notes += $lines[$i] }
+          }
+
+          if ($null -eq $start) {
+            throw "CHANGELOG.md has no section for $version. Add one before releasing."
+          }
+
+          $text = ($notes -join "`n").Trim()
+          if (-not $text) { throw "The CHANGELOG.md section for $version is empty." }
+
+          Set-Content -Path release-notes.md -Value $text -Encoding utf8
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+
+          # A push that did not bump VERSION is not an error - plenty of them
+          # only touch CI or documentation - but it is not a second release of
+          # the same version either.
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "::notice::$tag is already released; skipping. Bump VERSION to publish a new one."
+            exit 0
+          }
+
+          $assets = Get-ChildItem dist\*.exe
+          gh release create $tag $assets.FullName `
+            --title "RadioVoice $tag" `
+            --notes-file release-notes.md `
+            --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
