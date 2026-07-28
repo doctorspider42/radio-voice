@@ -1799,7 +1799,12 @@ void App::renderChainPanel()
 
     // Tall enough for the entries, never taller. Sizing it to the remaining
     // space put a scrollbar beside a list that already fitted.
-    const float contentHeight = rowPitch * static_cast<float>(chainNodes_.size());
+    // Half a row of headroom, which is exactly how far a grabbed entry can
+    // travel out of its slot. Without it the bottom entry, dragged downwards,
+    // would overflow the list and summon the scrollbar for the length of the
+    // gesture. Empty and invisible the rest of the time.
+    const float contentHeight = rowPitch * static_cast<float>(chainNodes_.size()) +
+                                rowPitch * 0.5f;
     const float available     = ImGui::GetContentRegionAvail().y;
     const float listHeight    = inspectedPlugin_
                                     ? std::min(contentHeight, available * 0.5f)
@@ -1837,8 +1842,12 @@ void App::renderChainPanel()
             // is long enough to scroll.
             const float wantedScreenY  = ImGui::GetIO().MousePos.y - dragGrabOffsetY_;
             const float naturalScreenY = listTopY + static_cast<float>(i) * rowPitch;
-            const float displacement =
-                std::clamp(wantedScreenY - naturalScreenY, -rowPitch, rowPitch);
+            // Half a row, not a whole one. The list reorders as the pointer
+            // passes each halfway mark, so a larger travel is unreachable
+            // anywhere except the two ends - where it would only push the row
+            // outside the list and bring back the scrollbar.
+            const float displacement = std::clamp(wantedScreenY - naturalScreenY,
+                                                  -rowPitch * 0.5f, rowPitch * 0.5f);
 
             ImGui::SetCursorPosY(slotTop + displacement);
         }
@@ -1956,9 +1965,11 @@ void App::renderChainPanel()
         ImGui::EndChild();
         ImGui::PopStyleColor(isDragged ? 2 : 1);
 
-        // The offset row must not drag the ones after it along, so the cursor
-        // returns to the grid regardless of where this entry was drawn.
-        ImGui::SetCursorPosY(slotTop + rowPitch);
+        // Only the displaced row needs putting back. Rewriting the cursor after
+        // every entry meant trusting rowPitch to match ImGui's own advance
+        // exactly, and any disagreement would accumulate down the list.
+        if (isDragged)
+            ImGui::SetCursorPosY(slotTop + rowPitch);
 
         // Where the pointer is decides the position, not how far it has
         // travelled. A threshold on the distance is what made this jump: it
@@ -1984,6 +1995,12 @@ void App::renderChainPanel()
 
     if (chainNodes_.empty())
         ImGui::TextDisabled("the chain is empty");
+
+    // Moving the cursor is not enough to tell a window how tall its contents
+    // are - only submitting an item does that, and the row above may have left
+    // the cursor past the last one it drew. A zero-sized item is the documented
+    // way to say "the content really does reach this far".
+    ImGui::Dummy(ImVec2(0.0f, 0.0f));
 
     ImGui::EndChild();
 
