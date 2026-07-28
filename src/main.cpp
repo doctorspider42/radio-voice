@@ -40,6 +40,13 @@ UINT g_resizeHeight  = 0;
 
 rv::app::App* g_app = nullptr;
 
+/// Scale requested by a WM_DPICHANGED, or zero when there is none pending.
+///
+/// Acted on from the main loop rather than inside the message handler: the
+/// response involves destroying the font texture, which cannot happen part-way
+/// through a frame that is already using it.
+float g_pendingDpiScale = 0.0f;
+
 void createRenderTarget()
 {
     ID3D11Texture2D* backBuffer = nullptr;
@@ -138,6 +145,20 @@ LRESULT WINAPI windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             return 0;
 
+        case WM_DPICHANGED:
+            // Windows supplies the rectangle the window should occupy on the
+            // display it has arrived at. Honouring it is what keeps a window
+            // dragged between a laptop panel and an external monitor the same
+            // apparent size instead of doubling or halving.
+            if (const RECT* suggested = reinterpret_cast<const RECT*>(lParam)) {
+                ::SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
+                               suggested->right - suggested->left,
+                               suggested->bottom - suggested->top,
+                               SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            g_pendingDpiScale = static_cast<float>(HIWORD(wParam)) / 96.0f;
+            return 0;
+
         case WM_SYSCOMMAND:
             // Swallow the Alt+Space system menu, which otherwise steals focus
             // while the user is typing into a field.
@@ -222,6 +243,29 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 
     const float dpiScale = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd);
 
+    // The saved size is in physical pixels, so a window sized on a 100% display
+    // and reopened on a 200% one comes back at half its apparent size, holding
+    // a layout whose text has doubled. Growing it to what the layout needs is
+    // less surprising than a first run that opens cramped and overlapping.
+    //
+    // Only ever grows: a window the user deliberately made large is left alone.
+    {
+        const int minimumWidth  = static_cast<int>(1180.0f * dpiScale);
+        const int minimumHeight = static_cast<int>(720.0f * dpiScale);
+
+        RECT rect{};
+        if (::GetWindowRect(hwnd, &rect)) {
+            const int width  = rect.right - rect.left;
+            const int height = rect.bottom - rect.top;
+            if (width < minimumWidth || height < minimumHeight) {
+                ::SetWindowPos(hwnd, nullptr, 0, 0,
+                               (width < minimumWidth) ? minimumWidth : width,
+                               (height < minimumHeight) ? minimumHeight : height,
+                               SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE);
+            }
+        }
+    }
+
     rv::gui::applyTheme();
     ImGui::GetStyle().ScaleAllSizes(dpiScale);
     const rv::gui::Fonts fonts = rv::gui::loadFonts(dpiScale);
@@ -229,7 +273,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_context);
 
-    if (!app->initialize(hwnd, fonts, std::move(saved)))
+    if (!app->initialize(hwnd, fonts, dpiScale, std::move(saved)))
         RV_ERROR("application initialisation reported a failure");
 
     const ImVec4 clearColour = rv::gui::theme::toVec4(rv::gui::theme::kBackground);
@@ -250,6 +294,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
             // Nothing is visible; yield instead of spinning on the GPU.
             ::Sleep(10);
             continue;
+        }
+
+        if (g_pendingDpiScale > 0.0f) {
+            const float scale = g_pendingDpiScale;
+            g_pendingDpiScale = 0.0f;
+
+            // The atlas holds glyphs rasterised for the old scale, so it is
+            // rebuilt rather than resized - a scaled bitmap font is exactly the
+            // blur this whole exercise exists to avoid.
+            ImGui_ImplDX11_InvalidateDeviceObjects();
+            ImGui::GetIO().Fonts->Clear();
+
+            // The theme is reapplied before scaling because ScaleAllSizes
+            // multiplies what is already there. Applied twice, the padding
+            // would compound instead of tracking the display.
+            rv::gui::applyTheme();
+            ImGui::GetStyle().ScaleAllSizes(scale);
+
+            const rv::gui::Fonts rescaled = rv::gui::loadFonts(scale);
+            ImGui_ImplDX11_CreateDeviceObjects();
+
+            if (g_app)
+                g_app->setDpiScale(scale, rescaled);
+
+            RV_INFO("display scale changed to %.0f%%", static_cast<double>(scale * 100.0f));
         }
 
         if (g_resizePending && g_resizeWidth > 0 && g_resizeHeight > 0) {

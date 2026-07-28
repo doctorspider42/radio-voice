@@ -31,7 +31,13 @@ public:
     /// `mainWindow` is the HWND plugin editors are parented to. `loaded` is the
     /// configuration the platform layer already read to size the window, passed
     /// in rather than read again so the file is parsed exactly once.
-    bool initialize(void* mainWindow, const gui::Fonts& fonts, Config loaded);
+    bool initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
+                    Config loaded);
+
+    /// Called when the window moves to a display of a different scale. The
+    /// fonts have already been rebuilt by the platform layer; this adopts them
+    /// along with the factor every hard-coded dimension is multiplied by.
+    void setDpiScale(float dpiScale, const gui::Fonts& fonts);
     void shutdown();
 
     /// Draws one frame into the current ImGui context.
@@ -98,6 +104,15 @@ private:
 
     double currentSampleRate() const;
 
+    /// Converts a dimension written in the code into device pixels.
+    ///
+    /// Every literal in the layout is expressed at 100% scale, which is only
+    /// the right number on one class of display. ImGui scales its own padding
+    /// and rasterises the fonts larger, so without this the text grows and the
+    /// panels holding it do not - which is not a cosmetic problem but an
+    /// overlapping one.
+    float px(float logical) const { return logical * dpiScale_; }
+
     void markDirty();
     void saveIfDirty();
 
@@ -135,6 +150,7 @@ private:
 
     void*      mainWindow_ = nullptr;
     gui::Fonts fonts_{};
+    float      dpiScale_ = 1.0f;
 
     bool wantsExit_          = false;
     bool showPluginBrowser_  = false;

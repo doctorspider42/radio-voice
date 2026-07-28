@@ -28,11 +28,6 @@ using namespace rv::gui;
 
 constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
 
-/// Height of one entry in the processing chain. Named because the drag-to-
-/// reorder threshold is derived from it, and the two drifting apart is how a
-/// single gesture starts moving a module by two places.
-constexpr float kChainRowHeight = 62.0f;
-
 /// Draws text, shortened with an ellipsis when it will not fit.
 ///
 /// Needed wherever a name of unknown length shares a row with controls that
@@ -84,10 +79,18 @@ App::~App()
     shutdown();
 }
 
-bool App::initialize(void* mainWindow, const gui::Fonts& fonts, Config loaded)
+void App::setDpiScale(float dpiScale, const gui::Fonts& fonts)
+{
+    dpiScale_ = dpiScale > 0.0f ? dpiScale : 1.0f;
+    fonts_    = fonts;
+}
+
+bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
+                     Config loaded)
 {
     mainWindow_ = mainWindow;
     fonts_      = fonts;
+    dpiScale_   = dpiScale > 0.0f ? dpiScale : 1.0f;
 
     config_ = std::move(loaded);
     config_.applyTo(params_);
@@ -552,7 +555,7 @@ void App::render()
     ImGui::SetNextWindowSize(viewport->WorkSize);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(12.0f), px(10.0f)));
     ImGui::Begin("##root", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -561,7 +564,7 @@ void App::render()
 
     renderTopBar();
 
-    const float transportHeight = 108.0f;
+    const float transportHeight = px(108.0f);
     const float bodyHeight = ImGui::GetContentRegionAvail().y - transportHeight -
                              ImGui::GetStyle().ItemSpacing.y;
 
@@ -575,14 +578,14 @@ void App::render()
     // rarely touched again, so the column holding them is worth reclaiming
     // while working on the sound.
     const float leftWidth = config_.ioCollapsed
-                                ? 34.0f
-                                : std::clamp(totalWidth * 0.23f, 250.0f, 340.0f);
+                                ? px(34.0f)
+                                : std::clamp(totalWidth * 0.23f, px(250.0f), px(340.0f));
 
     // Folded away, the chain keeps just enough width for the button that brings
     // it back; everything it gives up goes to the centre column.
     const float rightWidth = config_.chainCollapsed
-                                 ? 34.0f
-                                 : std::clamp(totalWidth * 0.24f, 260.0f, 360.0f);
+                                 ? px(34.0f)
+                                 : std::clamp(totalWidth * 0.24f, px(260.0f), px(360.0f));
 
     const float centreWidth = totalWidth - leftWidth - rightWidth -
                               ImGui::GetStyle().ItemSpacing.x * 2;
@@ -713,10 +716,10 @@ void App::renderTopBar()
 
     // Right-aligned controls.
     {
-        const float monitorWidth = 92.0f;
-        const float buttonWidth  = 84.0f;
-        const float restartWidth = 84.0f;
-        const float logWidth     = 62.0f;
+        const float monitorWidth = px(92.0f);
+        const float buttonWidth  = px(84.0f);
+        const float restartWidth = px(84.0f);
+        const float logWidth     = px(62.0f);
         const float spacing      = ImGui::GetStyle().ItemSpacing.x;
 
         ImGui::SameLine();
@@ -1054,7 +1057,7 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
         ImGui::TextUnformatted("exclusive mode");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
         if (toggleSwitch("exclusive", &exclusive)) {
             device.wasapiMode = exclusive ? WasapiMode::Exclusive : WasapiMode::Shared;
             markDirty();
@@ -1137,8 +1140,8 @@ void App::renderIoPanel()
     ImGui::PopFont();
 
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 24);
-    if (ImGui::Button("<", ImVec2(24, 0))) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(24.0f));
+    if (ImGui::Button("<", ImVec2(px(24.0f), 0))) {
         config_.ioCollapsed = true;
         markDirty();
     }
@@ -1188,7 +1191,7 @@ void App::renderIoPanel()
         ImGui::TextUnformatted("mono output");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
         if (toggleSwitch("monoOut", &mono)) {
             params_.monoOutput.store(mono);
             markDirty();
@@ -1212,7 +1215,7 @@ void App::renderIoPanel()
         ImGui::TextUnformatted("Monitor");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
 
         bool enabled = config_.monitorEnabled;
         if (toggleSwitch("monitorOn", &enabled)) {
@@ -1251,7 +1254,7 @@ void App::renderIoPanel()
             ImGui::PopStyleColor();
             ImGui::SameLine();
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                 ImGui::GetContentRegionAvail().x - 34);
+                                 ImGui::GetContentRegionAvail().x - px(34.0f));
             if (toggleSwitch("monitorMute", &monitorMuted)) {
                 params_.monitorMute.store(monitorMuted);
                 markDirty();
@@ -1390,7 +1393,7 @@ void App::renderProcessingPanel()
     // Two knob rows plus the checkbox row the compressor adds. Knobs wrap onto
     // further rows on a narrow window, so this is a floor rather than an exact
     // fit - the panels scroll if a very narrow window pushes them past it.
-    const float dynamicsHeight = 305.0f;
+    const float dynamicsHeight = px(305.0f);
 
     // One row: a switch, a slider and a speech indicator. Small on purpose -
     // the suppressor has one control worth having, and giving it a panel the
@@ -1413,7 +1416,7 @@ void App::renderProcessingPanel()
         ImGui::TextUnformatted("Equalizer");
         ImGui::PopFont();
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
         if (toggleSwitch("eqEnable", &eqEnabled)) {
             params_.eqEnabled.store(eqEnabled);
             params_.touch();
@@ -1437,7 +1440,7 @@ void App::renderProcessingPanel()
         ImGui::TextDisabled("drag handles - wheel over a handle sets Q");
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
-        const float curveHeight = available.y - 96.0f;
+        const float curveHeight = available.y - px(96.0f);
 
         if (eqEditor("eqCurve", params_, engine_->inputSpectrum(),
                      static_cast<float>(currentSampleRate()),
@@ -1491,7 +1494,7 @@ void App::renderProcessingPanel()
         // Three panels abreast need roughly this much to show their knobs
         // without wrapping them into a scrollbar. Below it the limiter - the
         // smallest of the three - drops to its own full-width row underneath.
-        constexpr float kThreeColumnMinimum = 660.0f;
+        const float kThreeColumnMinimum = px(660.0f);
 
         if (available >= kThreeColumnMinimum) {
             const float usable = available - spacing * 2;
@@ -1578,7 +1581,7 @@ void App::renderDenoisePanel()
     }
 
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
 
     bool enabled = params_.denoiseEnabled.load();
     if (unavailable)
@@ -1620,7 +1623,7 @@ void App::renderGatePanel()
     const bool  open      = meters_.gateOpen.load();
     const char* stateText = open ? "OPEN" : "SHUT";
 
-    constexpr float kSwitchWidth = 34.0f;
+    const float kSwitchWidth = px(34.0f);
     const float pillWidth = ImGui::CalcTextSize(stateText).x + 20.0f; // statusPill padding
     const float spacing   = ImGui::GetStyle().ItemSpacing.x;
 
@@ -1677,7 +1680,7 @@ void App::renderGatePanel()
     ImGui::SameLine(0, 12);
     ImGui::BeginGroup();
     ImGui::TextDisabled("GR");
-    gainReductionMeter("gateGr", meters_.gateReductionDb.load(), -60.0f, ImVec2(14, 72));
+    gainReductionMeter("gateGr", meters_.gateReductionDb.load(), -60.0f, ImVec2(px(14.0f), px(72.0f)));
     ImGui::EndGroup();
 }
 
@@ -1687,7 +1690,7 @@ void App::renderCompressorPanel()
     ImGui::TextUnformatted("Compressor");
     ImGui::PopFont();
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
 
     bool enabled = params_.compEnabled.load();
     if (toggleSwitch("compEnable", &enabled)) {
@@ -1744,7 +1747,7 @@ void App::renderCompressorPanel()
     ImGui::SameLine(0, 12);
     ImGui::BeginGroup();
     ImGui::TextDisabled("GR");
-    gainReductionMeter("compGr", meters_.compressorReductionDb.load(), -24.0f, ImVec2(14, 72));
+    gainReductionMeter("compGr", meters_.compressorReductionDb.load(), -24.0f, ImVec2(px(14.0f), px(72.0f)));
     ImGui::EndGroup();
 
     ImGui::Spacing();
@@ -1775,7 +1778,7 @@ void App::renderLimiterPanel()
     ImGui::TextUnformatted("Output Limiter");
     ImGui::PopFont();
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
 
     bool enabled = params_.limiterEnabled.load();
     if (toggleSwitch("limiterEnable", &enabled)) {
@@ -1801,7 +1804,7 @@ void App::renderLimiterPanel()
     ImGui::SameLine(0, 18);
     ImGui::BeginGroup();
     ImGui::TextDisabled("GR");
-    gainReductionMeter("limiterGr", meters_.limiterReductionDb.load(), -24.0f, ImVec2(14, 72));
+    gainReductionMeter("limiterGr", meters_.limiterReductionDb.load(), -24.0f, ImVec2(px(14.0f), px(72.0f)));
     ImGui::EndGroup();
 
     // Only worth the space when there is space; on a narrow window the knobs
@@ -1863,7 +1866,7 @@ void App::renderChainPanel()
     }
 
     // ---- expanded --------------------------------------------------------
-    if (ImGui::Button(">", ImVec2(24, 0))) {
+    if (ImGui::Button(">", ImVec2(px(24.0f), 0))) {
         config_.chainCollapsed = true;
         markDirty();
     }
@@ -1876,8 +1879,8 @@ void App::renderChainPanel()
     ImGui::PopFont();
 
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 96);
-    if (ImGui::Button("Add plugin", ImVec2(96, 0))) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(96.0f));
+    if (ImGui::Button("Add plugin", ImVec2(px(96.0f), 0))) {
         showPluginBrowser_ = true;
         pluginFilter_[0] = '\0';
     }
@@ -2141,7 +2144,7 @@ void App::renderPluginParameters()
     ImGui::TextUnformatted(plugin->name().c_str());
     ImGui::PopFont();
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 20);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(20.0f));
     if (ImGui::SmallButton("x")) {
         inspectedPlugin_ = nullptr;
         return;
@@ -2201,7 +2204,7 @@ void App::renderTransportBar()
         ImGui::TextUnformatted(title);
         ImGui::PopStyleColor();
 
-        levelMeter(title, dsp::gainToDb(peak), dsp::gainToDb(rms), ImVec2(240, 14), true);
+        levelMeter(title, dsp::gainToDb(peak), dsp::gainToDb(rms), ImVec2(px(240.0f), px(14.0f)), true);
 
         float value = gainDb.load();
         ImGui::SetNextItemWidth(240);
@@ -2232,7 +2235,7 @@ void App::renderTransportBar()
     bool mute = params_.mute.load();
     if (mute)
         ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kDanger));
-    if (ImGui::Button(mute ? "MUTED" : "Mute", ImVec2(90, 30))) {
+    if (ImGui::Button(mute ? "MUTED" : "Mute", ImVec2(px(90.0f), px(30.0f)))) {
         params_.mute.store(!mute);
         markDirty();
     }
@@ -2244,7 +2247,7 @@ void App::renderTransportBar()
     bool bypass = params_.bypassAll.load();
     if (bypass)
         ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kWarning));
-    if (ImGui::Button(bypass ? "BYPASSED" : "Bypass all", ImVec2(110, 30))) {
+    if (ImGui::Button(bypass ? "BYPASSED" : "Bypass all", ImVec2(px(110.0f), px(30.0f)))) {
         params_.bypassAll.store(!bypass);
         markDirty();
     }
@@ -2343,7 +2346,7 @@ void App::renderScanFolders()
 
 void App::renderPluginBrowser()
 {
-    ImGui::SetNextWindowSize(ImVec2(680, 520), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(px(680.0f), px(520.0f)), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Add plugin", &showPluginBrowser_)) {
         ImGui::End();
         return;
@@ -2375,7 +2378,7 @@ void App::renderPluginBrowser()
     ImGui::InputTextWithHint("##filter", "search by name or vendor",
                              pluginFilter_, sizeof(pluginFilter_));
 
-    ImGui::BeginChild("##list", ImVec2(0, -60), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##list", ImVec2(0, -px(60.0f)), ImGuiChildFlags_Borders);
 
     const auto plugins = scanner_.plugins();
     int shown = 0;
@@ -2444,7 +2447,7 @@ void App::renderPluginBrowser()
 
 void App::renderLogWindow()
 {
-    ImGui::SetNextWindowSize(ImVec2(760, 420), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(px(760.0f), px(420.0f)), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Log", &showLog_)) {
         ImGui::End();
         return;
