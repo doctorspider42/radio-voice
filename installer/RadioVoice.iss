@@ -344,15 +344,52 @@ begin
 end;
 
 procedure InitializeWizard;
+var
+  Warning: TNewMemo;
+  ItemHeight, ListHeight: Integer;
 begin
+  // The page's own description is a plain label: it does not scroll, and the
+  // warning is far longer than the wizard is tall, so as a description it
+  // simply runs off the bottom of the page. It goes into a memo below instead,
+  // which is why the page is created without one.
   DriverPage := CreateInputOptionPage(wpSelectTasks,
     CustomMessage('DriverPageTitle'),
     CustomMessage('DriverPageSubtitle'),
-    CustomMessage('DriverWarning'),
+    '',
     False, False);
 
   DriverPage.Add(CustomMessage('DriverAccept'));
   DriverPage.Add(CustomMessage('DriverEnableTestSigning'));
+
+  // Two rows, at a height this script sets rather than infers, so that the
+  // memo above can have all the remaining space without either of them
+  // guessing at the other's size.
+  ItemHeight := ScaleY(20);
+  ListHeight := 2 * ItemHeight;
+
+  Warning := TNewMemo.Create(DriverPage);
+  Warning.Parent := DriverPage.Surface;
+  Warning.Left := 0;
+  Warning.Top := DriverPage.CheckListBox.Top;
+  Warning.Width := DriverPage.SurfaceWidth;
+  Warning.Height := DriverPage.SurfaceHeight - Warning.Top - ListHeight -
+                    ScaleY(12);
+  Warning.Anchors := [akLeft, akTop, akRight, akBottom];
+  Warning.ScrollBars := ssVertical;
+  Warning.WordWrap := True;
+
+  // Read-only rather than disabled: the text stays selectable, so anyone who
+  // wants to paste "bcdedit /set testsigning off" somewhere can.
+  Warning.ReadOnly := True;
+  Warning.Text := CustomMessage('DriverWarning');
+
+  // No border on the checkboxes: they are the page's controls, not a second
+  // box competing with the memo, and this is how the Select Tasks page looks.
+  DriverPage.CheckListBox.BorderStyle := bsNone;
+  DriverPage.CheckListBox.MinItemHeight := ItemHeight;
+  DriverPage.CheckListBox.Top := DriverPage.SurfaceHeight - ListHeight;
+  DriverPage.CheckListBox.Height := ListHeight;
+  DriverPage.CheckListBox.Anchors := [akLeft, akRight, akBottom];
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;

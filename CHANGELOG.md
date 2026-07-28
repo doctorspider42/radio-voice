@@ -9,6 +9,16 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.3.1] — 2026-07-28
+
+### Fixed
+
+- The installer's driver warning — the page explaining what test signing costs
+  you — was cut off at the bottom of the wizard with no way to scroll, so the
+  half that matters most went unread and the two checkboxes below it were off
+  the page entirely. The text now sits in a scrolling box, with the checkboxes
+  under it where they can be reached.
+
 ## [0.3.0] — 2026-07-28
 
 ### Added
