@@ -151,7 +151,15 @@ if(RV_ENABLE_VST3)
 endif()
 
 # ---------------------------------------------------------------------------
-# ASIO SDK - Steinberg licence, not redistributable, must be supplied locally.
+# ASIO SDK - dual licensed: proprietary Steinberg, or GPLv3.
+#
+# The nine-file host subset is committed under third_party/asiosdk, which the
+# GPLv3 arm permits and the proprietary one does not. That choice is not free:
+# it is one of the two reasons this project is GPLv3 rather than something more
+# permissive. See NOTICE.md.
+#
+# RV_ASIO_SDK_DIR still exists so a copy obtained under the Steinberg agreement
+# can be pointed at instead.
 # ---------------------------------------------------------------------------
 if(RV_ENABLE_ASIO)
     if(NOT RV_ASIO_SDK_DIR OR NOT EXISTS ${RV_ASIO_SDK_DIR}/common/asio.h)
