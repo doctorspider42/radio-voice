@@ -40,7 +40,7 @@ Because a virtual cable is silent by definition, turn on **Monitor** in the top
 bar and point it at your headphones to hear yourself.
 
 [QUICKSTART.md](QUICKSTART.md) covers the whole path in detail, including driver
-signing. *(Currently in Polish.)*
+signing.
 
 ---
 

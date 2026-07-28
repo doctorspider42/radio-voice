@@ -1,39 +1,26 @@
-# RadioVoice Virtual Audio Cable — sterownik
+# RadioVoice Virtual Audio Cable — driver
 
-Sterownik jądra tworzący parę endpointów audio połączonych wewnętrznie:
+A kernel driver that creates a pair of audio endpoints wired to each other:
 
-| Endpoint | Widoczny jako | Rola |
+| Endpoint | Appears as | Role |
 |---|---|---|
-| `RadioVoice Output` | urządzenie odtwarzania | RadioVoice tu renderuje |
-| `RadioVoice Microphone` | urządzenie nagrywania | Discord / OBS / Teams to wybierają |
+| `RadioVoice Output` | playback device | RadioVoice renders into this |
+| `RadioVoice Microphone` | recording device | Discord / OBS / Teams select this |
 
-Wszystko zapisane do pierwszego pojawia się na drugim. Funkcjonalny odpowiednik
-VB-CABLE, bez zewnętrznej zależności.
+Everything written to the first comes out of the second. A functional equivalent
+of VB-CABLE with no external dependency.
 
----
-
-## Stan
-
-**Kompiluje się i linkuje czysto** (MSVC 19.44, WDK 10.0.26100, x64 Release i
-Debug, obraz Native z entry point `DriverEntry`, bez ostrzeżeń poza
-informacyjnym komunikatem z `stdunk.h` samego WDK).
-
-**Nie był uruchomiony.** Załadowanie go wymaga trybu testowego podpisywania i
-restartu maszyny — nie robiłem tego. Traktuj to jako kod, który przeszedł
-kompilator, nie jako przetestowany sterownik. Pierwsze uruchomienie rób z
-włączonym debuggerem jądra albo na maszynie wirtualnej; sekcja
-[Gdy coś nie działa](#gdy-coś-nie-działa) wymienia miejsca, które najpewniej
-będą wymagały poprawek.
+Format: 48 kHz, stereo, 16- or 24-bit PCM.
 
 ---
 
-## Wymagania
+## Requirements
 
-- Windows 10 wersja 2004 (build 19041) lub nowszy, x64
-- Windows SDK + WDK w tej samej wersji
-- Toolset MSVC x64
+- Windows 10 version 2004 (build 19041) or newer, x64
+- Windows SDK and WDK at the same version
+- The MSVC x64 toolset
 
-Na czystej maszynie:
+On a clean machine:
 
 ```powershell
 winget install --id Microsoft.WindowsSDK.10.0.26100 --exact
@@ -42,157 +29,183 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override `
   "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools"
 ```
 
-Instalacje SDK i WDK są maszynowe, więc wyskoczy UAC.
+The SDK and WDK install machine-wide, so expect a UAC prompt.
 
 ---
 
-## Wszystko naraz
+## All at once
 
-Z katalogu głównego repo:
+From the repository root:
 
 ```
 install-driver.cmd
 ```
 
-Podnosi się do administratora i wykonuje po kolei: sprawdzenie trybu testowego,
-build, certyfikat, podpis, instalację. Reszta tego pliku opisuje te kroki
-osobno — przydaje się, gdy coś pójdzie nie tak.
+It elevates itself and runs through the steps in order: test-signing check,
+build, certificate, signature, installation. The rest of this file describes
+those steps separately, which is what you need when one of them fails.
 
-Odinstalowanie: `uninstall-driver.cmd`.
+To remove it: `uninstall-driver.cmd`.
 
-## Budowanie
+## Building
 
 ```
 build-driver.cmd            Release
-build-driver.cmd debug      z tracingiem DbgPrintEx
+build-driver.cmd debug      with DbgPrintEx tracing
 ```
 
-albo bezpośrednio:
+or directly:
 
 ```powershell
 .\build.ps1 -Configuration Release
 ```
 
-Nazwa jest `build-driver.cmd`, a nie `build.cmd`, żeby nie myliła się z
-`build.cmd` w katalogu głównym repo, które buduje aplikację.
+The name is `build-driver.cmd` rather than `build.cmd` so it cannot be confused
+with the `build.cmd` in the repository root, which builds the application.
 
-Wynik: `driver\build\Release\RadioVoiceAudio.sys` + `.inf`.
+Produces `driver\build\Release\RadioVoiceAudio.sys` and the `.inf`.
 
-`build.ps1` woła `cl.exe` i `link.exe` bezpośrednio, zamiast używać projektu
-`.vcxproj`. Projekt sterownika wymaga integracji WDK z Visual Studio, która
-instaluje się jako VSIX i podpina wyłącznie do pełnego VS — nie do Build Tools.
-Wywołanie kompilatora wprost usuwa to sprzężenie i sprawia, że wszystkie flagi
-są widoczne w jednym pliku.
+`build.ps1` invokes `cl.exe` and `link.exe` directly instead of using a
+`.vcxproj`. A driver project needs the WDK's Visual Studio integration, which
+installs as a VSIX and attaches only to full Visual Studio, not to Build Tools.
+Calling the compiler directly removes that coupling and puts every flag in one
+readable file.
+
+**Bump `DriverVer` in the INF whenever the `.sys` changes.** Windows compares
+package versions and will keep running the binary it already has if the version
+has not moved, which looks exactly like a build that did not take effect.
 
 ---
 
-## Podpisywanie
+## Signing
 
-64-bitowy Windows nie załaduje niepodpisanego sterownika jądra. Są dwie drogi.
+64-bit Windows will not load an unsigned kernel driver. There are two routes.
 
-### Droga produkcyjna
+### Production
 
-Certyfikat EV code-signing (~400–600 USD/rok), konto w Microsoft Partner Center,
-przesłanie sterownika do Hardware Dev Center i odebranie podpisu Microsoftu.
-Wtedy sterownik ładuje się wszędzie, bez zmian w konfiguracji maszyny.
+An EV code-signing certificate, a Microsoft Partner Center account, submission
+to the Hardware Dev Center and a Microsoft signature in return. The driver then
+loads anywhere, with no changes to the machine's configuration.
 
-### Droga lokalna (tryb testowy)
+### Local (test signing)
 
-To, o co prosiłeś. Trzy kroki, wszystkie odwracalne.
+Three steps, all reversible.
 
-#### 1. Wyłącz Secure Boot
+#### 1. Turn off Secure Boot
 
-W firmware (UEFI). Bez tego `bcdedit /set testsigning on` zamelduje sukces, ale
-ustawienie nie zadziała — Secure Boot blokuje zmianę polityki podpisów.
+In the firmware (UEFI). Without this `bcdedit /set testsigning on` reports
+success but the setting does not take effect: Secure Boot blocks changes to the
+signing policy.
 
-Sprawdzenie stanu (PowerShell jako administrator):
+To check (PowerShell as administrator):
 
 ```powershell
 Confirm-SecureBootUEFI
 ```
 
-#### 2. Włącz tryb testowy
+#### 2. Enable test signing
 
-PowerShell **jako administrator**, potem restart:
+PowerShell **as administrator**, then reboot:
 
 ```powershell
 bcdedit /set testsigning on
 ```
 
-Po restarcie w prawym dolnym rogu pulpitu pojawi się znak wodny „Tryb testowy”.
+After the reboot a "Test Mode" watermark appears in the bottom-right corner of
+the desktop.
 
-> **Co to realnie oznacza.** Maszyna zaczyna akceptować dowolny sterownik jądra
-> podpisany certyfikatem, któremu ufa jej własny magazyn — a do tego magazynu
-> może dopisywać każdy proces z uprawnieniami administratora. Znika jedna z
-> warstw chroniących przed rootkitami. Na maszynie deweloperskiej to
-> akceptowalny kompromis; na maszynie, na której trzymasz coś wartościowego,
-> przemyśl to jeszcze raz. Wyłączenie: `bcdedit /set testsigning off` + restart.
+> **What this actually means.** The machine starts accepting any kernel driver
+> signed by a certificate its own store trusts — and any process with
+> administrator rights can add one to that store. One of the layers protecting
+> against rootkits stops applying. On a development machine that is a reasonable
+> trade; on a machine holding anything valuable, think again. To undo:
+> `bcdedit /set testsigning off` and reboot.
 
-#### 3. Certyfikat i podpis
+#### 3. Certificate and signature
 
 ```powershell
 cd driver
-.\tools\make-test-cert.ps1          # elevated, żeby od razu zaufać certyfikatowi
+.\tools\make-test-cert.ps1          # elevated
 .\tools\sign.ps1
 ```
 
-Żaden z tych skryptów o nic nie pyta.
+Neither script asks anything.
 
-`make-test-cert.ps1` tworzy certyfikat, zostawia klucz prywatny w Twoim
-magazynie (`Cert:\CurrentUser\My`), zapisuje publiczny `.cer` oraz odcisk palca,
-i wstawia `.cer` do `LocalMachine\Root` oraz `LocalMachine\TrustedPublisher`.
-Pierwszy magazyn sprawia, że podpis daje się zweryfikować; drugi wycisza pytanie
-„Czy chcesz zainstalować to oprogramowanie urządzenia?”.
+`make-test-cert.ps1` creates the certificate, leaves the private key in the
+certificate store, writes the public `.cer` and the thumbprint, and installs the
+`.cer` into `LocalMachine\Root` and `LocalMachine\TrustedPublisher`. The first
+store is what makes the signature verifiable; the second suppresses the "Would
+you like to install this device software?" prompt.
 
-`sign.ps1` wskazuje `signtool` na klucz w magazynie po odcisku palca. Nie ma
-pliku `.pfx`, więc nie ma też hasła do wymyślania i pamiętania — hasło
-chroniłoby plik leżący obok tego, co chroni, co niczego nie wnosi.
+**Run it elevated.** Elevated, the certificate goes into `Cert:\LocalMachine\My`;
+unelevated it lands in the personal store of that account, where the elevated
+installer — running as a different account — cannot see it. `sign.ps1` looks in
+the machine store first and falls back to the user one.
 
-Plik `.pfx` przydaje się tylko przy przenoszeniu certyfikatu na inną maszynę
-albo do CI, i wtedy jest opcjonalny:
+`sign.ps1` points `signtool` at the key by thumbprint. There is no `.pfx`, so
+there is no password to invent and remember — a password would protect a file
+sitting next to the thing it protects, which achieves nothing.
+
+A `.pfx` is only useful for moving the certificate to another machine or into
+CI, and is optional:
 
 ```powershell
-.\tools\make-test-cert.ps1 -ExportPfx      # dopiero teraz zapyta o hasło
+.\tools\make-test-cert.ps1 -ExportPfx      # this is what prompts for a password
 .\tools\sign.ps1 -Pfx .\build\cert\RadioVoiceTest.pfx
 ```
 
-`sign.ps1` generuje katalog (`Inf2Cat`) i podpisuje **oba** pliki:
+`sign.ps1` generates the catalogue (`Inf2Cat`) and signs **both** files:
 
-- `.sys` — żeby jądro załadowało obraz. Bez tego: kod 577,
+- the `.sys`, so the kernel will load the image. Without it: code 577,
   `STATUS_INVALID_IMAGE_HASH`.
-- `.cat` — żeby PnP przyjął pakiet przy instalacji.
+- the `.cat`, so PnP will accept the package at install time.
 
-Podpisanie tylko jednego daje mylący stan „w połowie działa”.
+**Order matters.** Sign the `.sys` first, then generate the catalogue, then sign
+the catalogue. Embedding a signature changes the file, so a catalogue generated
+first holds the hash of a file that no longer exists in that form. Everything
+appears to succeed and `pnputil` then rejects the package with
+`SPAPI_E_DRIVER_STORE_ADD_FAILED` (0xE0000247), which says nothing about hashes.
 
 ---
 
-## Instalacja
+## Installation
 
 ```powershell
 .\tools\install.ps1     # elevated
 ```
 
-Dwa osobne kroki, które łatwo pomylić:
+Two separate steps, easily confused:
 
-1. `pnputil /add-driver` wkłada pakiet do magazynu sterowników — czyni go
-   *dostępnym*, ale niczego nie tworzy.
-2. Urządzenie trzeba powołać do życia osobno. Nie ma sprzętu, który by je
-   wyliczył, więc jest to urządzenie root-enumerated i `devcon` musi jawnie
-   utworzyć węzeł o ID `root\RadioVoiceAudio`.
+1. `pnputil /add-driver` puts the package into the driver store, which makes it
+   *available* but creates nothing.
+2. The device has to be brought into existence separately. There is no hardware
+   to enumerate it, so it is a root-enumerated device and `devcon` must
+   explicitly create a node with the ID `root\RadioVoiceAudio`.
 
-Pominięcie kroku 2 to najczęstszy powód, dla którego wirtualny sterownik
-instaluje się „pomyślnie”, a żaden endpoint się nie pojawia.
+Skipping step 2 is the most common reason a virtual driver installs
+"successfully" and no endpoint ever appears.
 
-Weryfikacja:
+Exit code 3010 from `pnputil` — `ERROR_SUCCESS_REBOOT_REQUIRED` — means the
+package reached the store but the copy already running could not be unloaded.
+**Until the machine restarts, the endpoints are served by the previous binary**,
+so testing then measures the build before the one just installed. To avoid the
+reboot while developing, remove the device first and install into the gap:
+
+```
+uninstall-driver.cmd
+install-driver.cmd
+```
+
+To verify:
 
 ```powershell
 Get-PnpDevice -FriendlyName '*RadioVoice*'
 ```
 
-Potem w RadioVoice ustaw **Output** na `RadioVoice Output`, a w Discordzie
-mikrofon na `RadioVoice Microphone`.
+Then set **Output** to `RadioVoice Output` in RadioVoice, and the microphone to
+`RadioVoice Microphone` in the receiving application.
 
-### Odinstalowanie
+### Uninstalling
 
 ```powershell
 .\tools\uninstall.ps1   # elevated
@@ -200,94 +213,144 @@ mikrofon na `RadioVoice Microphone`.
 
 ---
 
-## Jak to działa
+## How it works
 
 ```
-            aplikacja renderuje
+            application renders
                      │
                      ▼
    ┌─────────────────────────────────┐
    │  WaveRender  ──►  TopologyRender│  ──► endpoint "RadioVoice Output"
    └────────┬────────────────────────┘
-            │  timer kopiuje bufor WaveRT ──► pierścień
+            │  timer copies the WaveRT buffer ──► ring
             ▼
       ┌───────────┐
       │  40 ms    │   LoopbackBuffer
-      │  pierścień│
+      │   ring    │
       └───────────┘
-            │  timer kopiuje pierścień ──► bufor WaveRT
+            │  timer copies the ring ──► WaveRT buffer
             ▲
    ┌────────┴────────────────────────┐
    │ TopologyCapture ──► WaveCapture │  ──► endpoint "RadioVoice Microphone"
    └─────────────────────────────────┘
                      │
                      ▼
-            aplikacja nagrywa
+           application records
 ```
 
-Cztery filtry: para wave + topology na każdy kierunek. Filtr topologii jest tym,
-co w ogóle sprawia, że endpoint pojawia się w panelu dźwięku — budowniczy
-endpointów szuka pinu o kategorii „głośnik” albo „mikrofon”. Sam filtr wave
-byłby niewidoczny.
+Four filters: a wave and a topology filter for each direction. The topology
+filter is what makes an endpoint appear in the sound control panel at all — the
+endpoint builder looks for a pin whose category is "speaker" or "microphone". A
+wave filter on its own would be invisible.
 
-**Brak sprzętu oznacza brak DMA.** W WaveRT to silnik DMA przesuwa rejestr
-pozycji; tutaj robi to timer wysokiej rozdzielczości, kopiując przy każdym tyknięciu
-tyle bajtów, ile wynika z zadeklarowanego formatu. Pozycja liczona jest z zegara
-przerwań, nie przez dodawanie stałej na tyknięcie — callbacki timera bywają
-spóźnione, a pozycja akumulująca ten błąd odjechałaby od czasu rzeczywistego.
+**No hardware means no DMA.** In WaveRT it is the DMA engine that advances the
+position register; here a high-resolution timer does it, copying as many bytes
+per tick as the declared format implies. The position is derived from the
+interrupt-time clock rather than by adding a constant per tick: timer callbacks
+run late by varying amounts, and a position accumulating that error would drift
+away from real time.
 
-**Jeden format, celowo.** 48 kHz, 2 kanały, float32. Pętla to kopiowanie bajt w
-bajt, więc gdyby strona render mogła otworzyć się jako 16-bit 44,1 kHz, a strona
-capture jako float32 48 kHz, bajty przechodzące przez pierścień nie znaczyłyby
-nic. Jeden format czyni tę niezgodność niereprezentowalną, zamiast czymś, co
-pierścień musi wykrywać i konwertować. Silnik audio Windows i tak przelicza dla
-klientów chcących czegokolwiek innego.
+**The tick is 1 ms, and fixed.** With no register to read, the tick interval *is*
+the resolution of the reported position — it is not a buffering choice. The audio
+engine polls roughly every 10 ms and expects what it reads to track real time.
+Deriving the tick from the buffer size, as an earlier version did, produced a
+64 ms tick on a 64 ms buffer: the position stood still and then jumped by a whole
+buffer, and the engine wrote in bursts separated by silence. Notifications are
+therefore driven by the position crossing a period boundary rather than by the
+callback running.
 
-### Pliki
+**Two formats, deliberately.** Pins advertise 16- and 24-bit PCM; the loopback
+ring is always 32-bit signed PCM. Advertising a single format leaves the audio
+engine nothing to negotiate, and it declines silently — indistinguishable from a
+driver that never loaded.
 
-| Plik | Rola |
+The internal format is integer rather than float, and that is not a detail.
+Kernel code on x64 may only touch floating-point or SSE registers between
+`KeSaveExtendedProcessorState` and `KeRestoreExtendedProcessorState`; using them
+bare corrupts the FPU state of whatever user-mode thread was interrupted. With a
+32-bit integer hub every conversion is a shift, so the question never arises on a
+path that runs every millisecond. Thirty-two bits also means the widest
+advertised width converts in and back out losslessly.
+
+### Files
+
+| File | Role |
 |---|---|
-| `Common.h` | format, rozmiary buforów, indeksy pinów, nazwy podurządzeń |
-| `Driver.cpp` | `DriverEntry`, `AddDevice`, wyładowanie |
-| `Adapter.cpp` | `StartDevice` — tworzy 4 filtry i połączenia fizyczne |
-| `Descriptors.cpp` | deskryptory filtrów, pinów, zakresy danych |
-| `MinWaveRT.cpp` | miniport WaveRT i strumienie (oba kierunki) |
-| `MinTopo.cpp` | miniport topologii |
-| `LoopbackBuffer.cpp` | pierścień łączący render z capture |
+| `Common.h` | formats, buffer sizes, pin indices, subdevice names |
+| `Driver.cpp` | `DriverEntry`, `AddDevice`, unload |
+| `Adapter.cpp` | `StartDevice` — creates the four filters and the physical connections |
+| `Descriptors.cpp` | filter and pin descriptors, data ranges |
+| `MinWaveRT.cpp` | the WaveRT miniport and its streams, both directions |
+| `MinTopo.cpp` | the topology miniport |
+| `LoopbackBuffer.cpp` | the ring joining render to capture |
+| `Diagnostics.cpp` | counters written to the service's registry key |
 
 ---
 
-## Gdy coś nie działa
+## Diagnostics
 
-Kod nie był uruchamiany, więc to lista miejsc, które sprawdziłbym najpierw.
+A driver that loads cleanly and then does nothing is the hardest kind to
+investigate: no crash, no error code, and `DbgPrintEx` needs a debugger on the
+other end. So the driver records what it did into its own service key, where any
+PowerShell prompt can read it:
 
-**Sterownik się nie ładuje (kod 577)** — podpis `.sys`. Sprawdź, czy tryb
-testowy faktycznie działa (znak wodny na pulpicie), i czy certyfikat jest w
-`LocalMachine\Root`.
+```
+HKLM\SYSTEM\CurrentControlSet\Services\RadioVoiceAudio\Diagnostics
+```
 
-**Instaluje się, ale nie ma endpointów** — najczęściej rozjazd między nazwami
-podurządzeń. Ciągi `RV_WAVE_RENDER_NAME` i pokrewne w `Common.h` muszą się
-zgadzać co do znaku z `KSNAME_*` w INF. Rozjazd nie generuje żadnego błędu —
-sterownik ładuje się i milczy.
+```powershell
+.\tools\diagnose.ps1
+```
 
-Drugi kandydat: `PcRegisterPhysicalConnection`. Kierunek połączenia różni się
-między render a capture i musi wskazywać zgodnie z przepływem sygnału, inaczej
-budowniczy endpointów za nim nie pójdzie.
+reports the device state, those counters, the registered KS interfaces and the
+resulting endpoints. Counters incremented from the timer callback cannot write
+themselves — the IRQL there forbids it — so they are published on the next state
+change. **Stop the stream before reading them.**
 
-**Endpoint jest, ale cisza** — pętla timera w `MinWaveRT.cpp::OnTick`. Podejrzane
-w kolejności: czy `SetState(KSSTATE_RUN)` w ogóle przychodzi, czy timer
-wystartował, czy `m_bufferSize` jest sensowny.
-
-**Trzaski albo dryf** — `RV_LOOPBACK_MS` (40 ms) i sposób liczenia pozycji.
-Oba endpointy mają niezależne timery, więc pierścień musi absorbować ich
-rozjazd.
-
-Podgląd logów: DebugView z opcją „Capture Kernel” (makro `RV_LOG` woła
-`DbgPrintEx`, aktywne tylko w buildzie Debug).
+`tools\ksprobe` dumps the pins, dataflow, communication, categories, physical
+connections and data ranges of any KS filter. Pointing it at this driver and at a
+known-good one side by side is what found the format mismatch that kept the
+endpoints from being created at all.
 
 ---
 
-## Licencja
+## When something does not work
 
-GPL-3.0-or-later, tak jak reszta projektu. Linkuje wyłącznie nagłówki i
-biblioteki importu z WDK, objęte licencją Microsoftu i nieredystrybuowane tutaj.
+**The driver does not load (code 577)** — the `.sys` signature. Check that test
+mode is really active (the watermark on the desktop, not what `bcdedit` printed)
+and that the certificate is in `LocalMachine\Root`.
+
+**`pnputil` fails with `SPAPI_E_DRIVER_STORE_ADD_FAILED` (0xE0000247)** — most
+often the catalogue does not match the `.sys`, because it was generated before
+the binary was signed. Re-run `tools\sign.ps1`, which does them in the right
+order.
+
+**It installs but there are no endpoints** — two candidates. First, a mismatch
+between subdevice names: `RV_WAVE_RENDER_NAME` and its relatives in `Common.h`
+must match the `KSNAME_*` entries in the INF character for character. A mismatch
+produces no error at all; the driver loads and says nothing.
+
+Second, the advertised data ranges. If the audio engine cannot negotiate a
+format it declines silently, which looks the same. Compare against a working
+driver with `tools\ksprobe`.
+
+**The endpoint exists but there is silence** — the timer loop in
+`MinWaveRT.cpp::OnTick`. In order of suspicion: whether `SetState(KSSTATE_RUN)`
+arrives at all, whether the timer started, and what the reported position is
+doing. The counters under `Diagnostics` answer all three.
+
+**Crackling, or drift** — `RV_LOOPBACK_MS` (40 ms) and the position arithmetic.
+Both endpoints run independent timers, so the ring has to absorb the difference.
+A burst longer than the ring is data loss on every burst, which is audible as a
+regular rasp.
+
+Log viewing: DebugView with "Capture Kernel" enabled. The `RV_LOG` macro calls
+`DbgPrintEx` and is compiled in only for Debug builds.
+
+---
+
+## Licence
+
+GPL-3.0-or-later, like the rest of the project. It links only against Windows
+Driver Kit headers and import libraries, which are covered by the Microsoft WDK
+licence terms and are not redistributed here.

@@ -93,8 +93,6 @@ a License Agreement signed by Steinberg - see `third_party/asiosdk/LICENSE.txt`.
 `tools/fetch-asio-sdk.cmd` re-downloads the full SDK, for updating to a newer
 release; it is not needed for an ordinary build.
 
-ASIO is a trademark and software of Steinberg Media Technologies GmbH.
-
 ### Fonts
 
 The interface renders with **Segoe UI**, loaded at runtime from the system font

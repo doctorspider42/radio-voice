@@ -1,46 +1,43 @@
-# Instrukcja: zbudowanie i uruchomienie
+# Building and running
 
-Od zera do przetworzonego mikrofonu w Discordzie.
-
-Wszystkie polecenia w tym pliku były uruchomione na tej maszynie — poza tymi,
-które wymagają restartu systemu; te są wyraźnie oznaczone.
+From nothing to a processed microphone in Discord.
 
 ---
 
-## Spis
+## Contents
 
-1. [Narzędzia](#1-narzędzia)
-2. [Aplikacja](#2-aplikacja)
-3. [Wirtualne wyjście — droga A: VB-CABLE](#3a-wirtualne-wyjście--droga-a-vb-cable)
-4. [Wirtualne wyjście — droga B: własny sterownik](#3b-wirtualne-wyjście--droga-b-własny-sterownik)
-5. [Konfiguracja w Discordzie / OBS / Teams](#4-konfiguracja-w-aplikacjach-docelowych)
-6. [Codzienne użycie](#5-codzienne-użycie)
-7. [Gdy coś nie działa](#6-gdy-coś-nie-działa)
-8. [Cofnięcie wszystkiego](#7-cofnięcie-wszystkiego)
+1. [Tools](#1-tools)
+2. [The application](#2-the-application)
+3. [Virtual output — option A: VB-CABLE](#3a-virtual-output--option-a-vb-cable)
+4. [Virtual output — option B: the bundled driver](#3b-virtual-output--option-b-the-bundled-driver)
+5. [Setting it up in Discord / OBS / Teams](#4-setting-it-up-in-the-receiving-application)
+6. [Everyday use](#5-everyday-use)
+7. [When something does not work](#6-when-something-does-not-work)
+8. [Undoing everything](#7-undoing-everything)
 
 ---
 
-## 1. Narzędzia
+## 1. Tools
 
-### Do samej aplikacji
+### For the application
 
-| Co | Po co |
+| What | Why |
 |---|---|
-| CMake ≥ 3.24 | system budowania |
+| CMake ≥ 3.24 | build system |
 | Ninja | generator |
-| MinGW-w64 GCC ≥ 13 **albo** MSVC 2019+ | kompilator |
-| Git | CMake pobiera nim zależności |
+| MinGW-w64 GCC ≥ 13 **or** MSVC 2019+ | compiler |
+| Git | CMake uses it to fetch dependencies |
 
-Przez [scoop](https://scoop.sh):
+Via [scoop](https://scoop.sh):
 
 ```powershell
 scoop install cmake ninja mingw git
 ```
 
-Zależności (Dear ImGui, nlohmann/json, VST3 SDK) pobiera CMake sam przy
-pierwszej konfiguracji. Potrzebny jest dostęp do sieci — potem już nie.
+Dear ImGui, nlohmann/json, the VST3 SDK and RNNoise are fetched by CMake on the
+first configure, so that step needs network access. Nothing afterwards does.
 
-### Dodatkowo do sterownika
+### Additionally, for the driver
 
 ```powershell
 winget install --id Microsoft.WindowsSDK.10.0.26100 --exact
@@ -49,306 +46,324 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override `
   "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools"
 ```
 
-Instalacje SDK i WDK są maszynowe, więc wyskoczy UAC. Sterownik jądra wymaga
-MSVC — MinGW tu nie wystarczy.
-
-> **Na Twojej maszynie to już jest zainstalowane.** SDK 10.0.26100, WDK
-> 10.0.26100 i Build Tools 2022 z toolsetem C++ (MSVC 19.44) doinstalowałem w
-> trakcie pracy nad sterownikiem.
+The SDK and WDK install machine-wide, so expect a UAC prompt. The kernel driver
+requires MSVC; MinGW cannot build it.
 
 ---
 
-## 2. Aplikacja
+## 2. The application
 
 ### Build
 
-Z **katalogu głównego** repo:
+From the **repository root**:
 
 ```
 build.cmd
 ```
 
-Wynik: **`build\bin\RadioVoice.exe`**, ok. 2,8 MB. Pierwsza konfiguracja trwa
-~35 s (klonowanie ImGui i VST3 SDK), build ~1 min.
+Produces **`build\bin\RadioVoice.exe`**, around 18 MB — most of which is the
+noise suppression model, compiled in. The first configure takes a few minutes
+because it clones the VST3 SDK and downloads a 56 MB model archive; later builds
+take about a minute.
 
-> Uwaga: `driver\build-driver.cmd` to co innego — buduje sterownik jądra, nie
-> aplikację.
+> `driver\build-driver.cmd` is a different thing entirely — it builds the kernel
+> driver, not the application.
 
-Inne warianty:
+Other variants:
 
 ```
-build.cmd reldbg     Release + symbole, gdy potrzebny stack trace  (~28 MB)
-build.cmd debug      bez optymalizacji, z asercjami
-build.cmd msvc       Visual Studio zamiast MinGW
-build.cmd no-vst3    bez hosta wtyczek — usuwa jedyną zależność copyleft
+build.cmd reldbg     Release plus symbols, for a usable stack trace
+build.cmd debug      no optimisation, assertions on
+build.cmd msvc       Visual Studio instead of MinGW
+build.cmd no-vst3    no plugin host
 ```
 
-Każdy wariant ma własny katalog (`build`, `build-reldbg`, `build-debug`…), więc
-przełączanie się między nimi nie wymusza przebudowy od zera.
+Each variant has its own directory (`build`, `build-reldbg`, `build-debug`, …),
+so switching between them does not force a rebuild from scratch.
+
+To build without the noise suppressor — and without its download and its 15 MB
+of weights — configure with `-DRV_ENABLE_RNNOISE=OFF`.
 
 ### ASIO
 
-Nie wymaga niczego — SDK jest w repo (dziewięć plików, 80 KB), więc `build.cmd`
-od razu buduje z obsługą ASIO. Podstawa prawna: [NOTICE.md](NOTICE.md).
+Needs nothing extra: the host subset of the SDK is in the repository, so
+`build.cmd` produces a binary with ASIO support. Licensing details are in
+[NOTICE.md](NOTICE.md).
 
-Aktualizacja SDK do nowszego wydania, gdyby kiedyś była potrzebna:
+To update the SDK to a newer release, should that ever be needed:
 
 ```
 tools\fetch-asio-sdk.cmd -Force
 ```
 
-### Pierwsze uruchomienie
+### First run
 
 ```powershell
 .\build\bin\RadioVoice.exe
 ```
 
-Co się dzieje samo:
+What happens on its own:
 
-- jako **wejście** ustawia domyślny mikrofon systemowy
-- jako **wyjście** — kabel wirtualny, jeśli jakiś znajdzie (`CABLE Input` ma
-  pierwszeństwo); jeśli nie, panel I/O wyjaśni czego brakuje
-- startuje przetwarzanie i skanuje wtyczki VST3 w tle
-- do łańcucha wkłada bramkę szumów i korektor
+- the system's default microphone is selected as **input**
+- a virtual cable is selected as **output** if one is installed (`CABLE Input`
+  is preferred); if none is, the I/O panel explains what is missing
+- processing starts and VST3 plugins are scanned in the background
+- the chain is filled with the noise suppressor, gate, equalizer and compressor
 
-Pliki, które tworzy:
+Files it creates:
 
 ```
-%APPDATA%\RadioVoice\config.json        ustawienia, łańcuch, stan wtyczek
-%APPDATA%\RadioVoice\plugins.json       cache skanu wtyczek
-%APPDATA%\RadioVoice\radiovoice.log     log — pierwsza rzecz do sprawdzenia
+%APPDATA%\RadioVoice\config.json        settings, chain, plugin state
+%APPDATA%\RadioVoice\plugins.json       plugin scan cache
+%APPDATA%\RadioVoice\radiovoice.log     log - the first thing to check
 ```
 
-Skasowanie `config.json` przywraca stan fabryczny.
+Deleting `config.json` restores factory settings.
 
-### Sprawdzenie, że działa
+### Checking that it works
 
-W pasku u góry powinno być zielone **RUNNING**, a przy mówieniu do mikrofonu
-miernik **INPUT** na dole ma się ruszać. Jeśli stoi — zajrzyj do
-[sekcji 6](#6-gdy-coś-nie-działa).
+The top bar should show a green **RUNNING**, and the **INPUT** meter at the
+bottom should move when you speak. If it does not, see
+[section 6](#6-when-something-does-not-work).
 
 ---
 
-## 3A. Wirtualne wyjście — droga A: VB-CABLE
+## 3A. Virtual output — option A: VB-CABLE
 
-Najszybsza. Nic nie zmienia w zabezpieczeniach systemu.
+The quickest route. Changes nothing about the machine's security posture.
 
-1. Pobierz i zainstaluj [VB-CABLE](https://vb-audio.com/Cable/) (instalator
-   uruchom jako administrator, potem restart).
-2. W RadioVoice ustaw **Output** na `CABLE Input (VB-Audio Virtual Cable)`.
-   Jeśli aplikacja już działała, kliknij **Restart audio** w pasku u góry.
+1. Download and install [VB-CABLE](https://vb-audio.com/Cable/) (run the
+   installer as administrator, then reboot).
+2. In RadioVoice set **Output** to `CABLE Input (VB-Audio Virtual Cable)`.
 
-Gotowe — przejdź do [sekcji 4](#4-konfiguracja-w-aplikacjach-docelowych).
+Done — go to [section 4](#4-setting-it-up-in-the-receiving-application).
 
 ---
 
-## 3B. Wirtualne wyjście — droga B: własny sterownik
+## 3B. Virtual output — option B: the bundled driver
 
-Bez zewnętrznych zależności, ale wymaga obniżenia zabezpieczeń maszyny i
-dwóch restartów.
+No external dependency, but it requires lowering the machine's security settings
+and two reboots.
 
-> **Przeczytaj najpierw.** Sterownik kompiluje się czysto i cały łańcuch
-> podpisywania jest sprawdzony, ale **nigdy nie był załadowany** — to wymaga
-> restartu w trybie testowym, którego nie robiłem. Pierwsze uruchomienie zrób
-> na maszynie wirtualnej albo z debuggerem jądra. `driver/README.md` ma listę
-> miejsc, które najpewniej będą wymagały poprawek.
-
-### Najkrótsza droga
+### The short way
 
 ```
 install-driver.cmd
 ```
 
-Sam się podnosi do administratora i robi wszystko po kolei: sprawdza tryb
-testowy, buduje, tworzy certyfikat, podpisuje, instaluje. Jeśli tryb testowy
-jest wyłączony — zaproponuje włączenie i poprosi o restart, po którym trzeba
-uruchomić go ponownie (przez restart nie da się przejść w jednym poleceniu).
+It elevates itself and does everything in order: checks test signing, builds,
+creates a certificate, signs, installs. If test signing is off it offers to turn
+it on and asks for a reboot, after which it has to be run again — a reboot
+cannot be crossed inside one command.
 
-Odinstalowanie: `uninstall-driver.cmd`.
+To remove it: `uninstall-driver.cmd`.
 
-Poniżej to samo krok po kroku, gdyby coś poszło nie tak.
+Below is the same thing step by step, for when something goes wrong.
 
-### Krok 1 — zbuduj
+### Step 1 — build
 
 ```
 driver\build-driver.cmd
 ```
 
-Wynik: `driver\build\Release\RadioVoiceAudio.sys` + `.inf`.
+Produces `driver\build\Release\RadioVoiceAudio.sys` and the `.inf`.
 
-### Krok 2 — wyłącz Secure Boot
+### Step 2 — turn off Secure Boot
 
-W firmware (UEFI). Bez tego następny krok zamelduje sukces, ale ustawienie nie
-zadziała — Secure Boot blokuje zmianę polityki podpisów.
+In the firmware (UEFI). Without this the next step reports success but the
+setting does not take effect: Secure Boot blocks changes to the signing policy.
 
-Sprawdzenie stanu (PowerShell **jako administrator**):
+To check (PowerShell **as administrator**):
 
 ```powershell
 Confirm-SecureBootUEFI
 ```
 
-`False` albo błąd „not supported" (legacy BIOS) = możesz iść dalej.
+`False`, or a "not supported" error on a legacy BIOS, means you can continue.
 
-### Krok 3 — włącz tryb testowy
+### Step 3 — enable test signing
 
-PowerShell **jako administrator**:
+PowerShell **as administrator**:
 
 ```powershell
 bcdedit /set testsigning on
 ```
 
-➜ **RESTART.** Po nim w prawym dolnym rogu pulpitu pojawi się znak wodny
-„Tryb testowy”.
+➜ **REBOOT.** Afterwards a "Test Mode" watermark appears in the bottom-right
+corner of the desktop.
 
-> **Co to realnie kosztuje.** Maszyna zaczyna akceptować dowolny sterownik
-> jądra podpisany certyfikatem, któremu ufa jej własny magazyn — a dopisać tam
-> może każdy proces z uprawnieniami administratora. Znika jedna z warstw
-> chroniących przed rootkitami. Odwracalne: patrz [sekcja 7](#7-cofnięcie-wszystkiego).
+> **What this actually costs.** The machine starts accepting any kernel driver
+> signed by a certificate its own store trusts — and any process with
+> administrator rights can add one there. One of the layers protecting against
+> rootkits stops applying. It is reversible: see
+> [section 7](#7-undoing-everything).
 
-### Krok 4 — certyfikat i podpis
+### Step 4 — certificate and signature
 
-PowerShell **jako administrator** (elewacja jest po to, żeby od razu zaufać
-certyfikatowi):
+PowerShell **as administrator** (elevation is what lets the certificate be
+trusted immediately, and what puts it in the machine store where the installer
+can find it):
 
 ```
 driver\tools\make-test-cert.cmd
 driver\tools\sign.cmd
 ```
 
-Żaden z tych skryptów o nic nie pyta. Klucz prywatny zostaje w Twoim magazynie
-certyfikatów, `signtool` sięga po niego po odcisku palca.
+Neither script asks anything. The private key stays in the certificate store and
+`signtool` reaches it by thumbprint.
 
-`sign.ps1` generuje katalog i podpisuje **oba** pliki — `.sys`, żeby jądro
-załadowało obraz, i `.cat`, żeby PnP przyjął pakiet przy instalacji.
+`sign.ps1` generates the catalogue and signs **both** files: the `.sys` so the
+kernel will load the image, and the `.cat` so PnP will accept the package at
+install time.
 
-### Krok 5 — zainstaluj
+### Step 5 — install
 
 ```
 driver\tools\install.cmd
 ```
 
-Weryfikacja:
+To verify:
 
 ```powershell
 Get-PnpDevice -FriendlyName '*RadioVoice*'
 ```
 
-Powinny być dwa urządzenia w stanie `OK`. W panelu dźwięku:
+There should be two devices in state `OK`. In the sound control panel:
 
-- **Odtwarzanie** → `RadioVoice Output`
-- **Nagrywanie** → `RadioVoice Microphone`
+- **Playback** → `RadioVoice Output`
+- **Recording** → `RadioVoice Microphone`
 
-### Krok 6 — wskaż je w aplikacji
+### Step 6 — select it in the application
 
-W RadioVoice ustaw **Output** na `RadioVoice Output` i kliknij **Restart audio**.
+In RadioVoice set **Output** to `RadioVoice Output`. The engine restarts by
+itself.
+
+> Reinstalling the driver destroys and recreates the endpoints, which gives them
+> new identifiers. RadioVoice follows a device that reappears under the same
+> name, so the selection survives.
 
 ---
 
-## 4. Konfiguracja w aplikacjach docelowych
+## 4. Setting it up in the receiving application
 
-Wszędzie ta sama zasada: wybierz jako **mikrofon** wyjściową stronę kabla.
+The rule is the same everywhere: select the **output side of the cable** as the
+microphone.
 
-| Droga | Co wybrać jako mikrofon |
+| Option | What to select as the microphone |
 |---|---|
 | A (VB-CABLE) | `CABLE Output (VB-Audio Virtual Cable)` |
-| B (własny sterownik) | `RadioVoice Microphone` |
+| B (bundled driver) | `RadioVoice Microphone` |
 
-- **Discord** — Ustawienia → Głos i wideo → Urządzenie wejściowe.
-  **Wyłącz tam redukcję szumów i AGC** (Krisp, „Echo Cancellation”,
-  „Automatic Gain Control”) — inaczej Discord przetworzy jeszcze raz sygnał,
-  który już jest przetworzony, i pobije się z bramką.
-- **OBS** — Źródło → Przechwytywanie wejścia audio.
-- **Teams / Zoom / Meet** — ustawienia urządzeń, mikrofon.
-
----
-
-## 5. Codzienne użycie
-
-RadioVoice musi **działać w tle**, żeby dźwięk płynął — to on przetwarza i
-podaje sygnał do kabla. Zamknięcie okna zatrzymuje tor.
-
-- **Bypass all** — puszcza surowy mikrofon bez przetwarzania, do porównania A/B
-- **Mute** — cisza na wyjściu
-- ustawienia zapisują się same; zamknięcie okna zapisuje też stan wtyczek
-
-Ustawianie bramki: gadaj normalnie i zjeżdżaj progiem w dół, aż wskaźnik
-**OPEN/SHUT** przestanie migotać między słowami. `hyst` powiększ, jeśli bramka
-nadal „klekocze”.
-
-Ustawianie kompresora: zjeżdżaj progiem, aż miernik **GR** pokazuje 3–6 dB na
-głośniejszych sylabach. `ratio` 3:1 wystarcza do mowy, `auto makeup` sam
-wyrówna głośność. Zostaw **RMS** włączone — reaguje na głośność, nie na
-pojedyncze transjenty, i na mowie jest przez to niesłyszalny.
-
-Jeśli masz jeden mikrofon w stereofonicznym wejściu interfejsu, ustaw tryb
-kanałów wejścia (pod wyborem mikrofonu) na **Mono (left)** albo **Mono
-(right)** — inaczej głos wyjdzie po jednej stronie.
+- **Discord** — Settings → Voice & Video → Input Device.
+  **Turn off its noise suppression and AGC** there (Krisp, Echo Cancellation,
+  Automatic Gain Control). Otherwise Discord processes an already processed
+  signal and fights with the gate.
+- **OBS** — Source → Audio Input Capture.
+- **Teams / Zoom / Meet** — device settings, microphone.
 
 ---
 
-## 6. Gdy coś nie działa
+## 5. Everyday use
 
-Pierwszy przystanek zawsze: **przycisk `Log`** w prawym górnym rogu, albo
+RadioVoice has to **keep running** for audio to flow: it is what processes the
+signal and feeds the cable. Closing the window stops the path.
+
+A cable is silent by definition, so to hear yourself turn on **Monitor** in the
+top bar and select your headphones under Audio I/O. It starts and stops without
+interrupting what is being sent.
+
+- **Bypass all** — passes the raw microphone through, for an A/B comparison
+- **Mute** — silence on the output
+- settings save themselves; closing the window also saves plugin state
+
+**Noise suppressor.** Leave it around 90%. It removes steady noise — a fan, an
+air conditioner — while you are talking, which the gate cannot do. Taking all
+100% can sound processed in a quiet room. It adds 10 ms of latency while it is
+in the chain, and runs at 48 kHz only.
+
+**Gate.** Talk normally and lower the threshold until the **OPEN/SHUT**
+indicator stops flickering between words. Raise `hyst` if it still chatters.
+
+**Compressor.** Lower the threshold until the **GR** meter shows 3–6 dB on the
+louder syllables. A `ratio` of 3:1 is enough for speech, and `auto makeup`
+evens out the level. Leave **RMS** on: it follows loudness rather than
+individual transients, which on speech is what makes it inaudible.
+
+If you have a single microphone in one side of a stereo input, set the input
+fold-down (under the microphone selector) to **Mono (left)** or **Mono (right)**,
+or the voice will come out on one side only.
+
+---
+
+## 6. When something does not work
+
+First stop, always: the **`Log`** button in the top-right corner, or
 `%APPDATA%\RadioVoice\radiovoice.log`.
 
-**Miernik INPUT stoi, mimo że mówisz**
-Aplikacja pokaże ostrzeżenie, jeśli urządzenie jest otwarte, ale nic nie
-dostarcza. Sprawdź, czy mikrofon nie jest wyciszony w ustawieniach dźwięku
-Windows, i czy w Prywatności jest zgoda na dostęp aplikacji desktopowych do
-mikrofonu.
+**The INPUT meter does not move while you speak**
+The application warns when a device is open but delivering nothing. Check that
+the microphone is not muted in Windows sound settings, and that desktop
+applications are allowed microphone access under Privacy.
 
-**Nie ma na co ustawić Output**
-Nie masz zainstalowanego żadnego kabla wirtualnego — [sekcja 3A](#3a-wirtualne-wyjście--droga-a-vb-cable)
-albo [3B](#3b-wirtualne-wyjście--droga-b-własny-sterownik).
+**There is nothing to set Output to**
+No virtual cable is installed — see [section 3A](#3a-virtual-output--option-a-vb-cable)
+or [3B](#3b-virtual-output--option-b-the-bundled-driver).
 
-**`dropouts` rośnie**
-Zwiększ **Processing block** (256 → 512). Jeśli `dsp` jest blisko 100%, łańcuch
-nie mieści się w terminie — wyłącz najcięższą wtyczkę.
+**`dropouts` is climbing**
+Increase **Processing block** (256 → 512). If `dsp` is near 100% the chain is
+missing its deadline; switch off the heaviest plugin.
 
-**`drift` przyklejony do ±5000 ppm**
-Zegary wejścia i wyjścia rozjeżdżają się bardziej, niż resampler potrafi
-nadrobić. Zdarza się przy dwóch urządzeniach czysto programowych. Spróbuj innej
-pary urządzeń albo tej samej częstotliwości po obu stronach.
+**`drift` is pinned at ±5000 ppm**
+The input and output clocks are further apart than the resampler can make up.
+This happens with two purely software devices. Try a different pair, or the same
+sample rate on both sides.
 
-**Aplikacja nie startuje**
-Log zapisuje ścieżkę wtyczki tuż przed jej załadowaniem. Jeśli wtyczka wywali
-proces, przy kolejnym starcie trafi na czarną listę i aplikacja wstanie.
-Czarną listę wyczyścisz w oknie „Add plugin”.
+**The application does not start**
+The log records a plugin's path immediately before loading it. If a plugin takes
+the process down, it is blacklisted on the next start and the application comes
+up. The blacklist can be cleared from the *Add plugin* window.
 
-**Brak wtyczek na liście**
-Skanowane są standardowe katalogi VST3. Wtyczki 32-bitowe z
-`Program Files (x86)\Common Files\VST3` nie załadują się do 64-bitowego procesu
-— log powie to wprost (błąd 193).
+**No plugins in the list**
+Standard VST3 folders are scanned; extra ones can be added under **Scan folders**
+in the *Add plugin* window. 32-bit plugins from
+`Program Files (x86)\Common Files\VST3` will not load into a 64-bit process —
+the log says so explicitly (error 193).
 
-**Sterownik** — osobna lista objawów jest w
-[`driver/README.md`](driver/README.md#gdy-coś-nie-działa).
+**Audio breaks up with DirectSound as the input**
+Some interfaces deliver only a fraction of real time through DirectSound
+capture. The log reports how the polls divided up when the stream stops. Use
+WASAPI.
+
+**Driver problems** — a separate list of symptoms is in
+[`driver/README.md`](driver/README.md#when-something-does-not-work).
 
 ---
 
-## 7. Cofnięcie wszystkiego
+## 7. Undoing everything
 
-### Sterownik
+### The driver
 
 ```
 uninstall-driver.cmd
 ```
 
-Usuwa urządzenie, pakiet sterownika i certyfikat testowy. Tryb testowy zostaje
-— to ustawienie całej maszyny, mogło być włączone wcześniej dla czegoś innego.
-Wyłączenie (PowerShell **jako administrator**, potem **restart**):
+Removes the device, the driver package and the test certificate. Test signing
+stays on: it is a machine-wide setting and may have been enabled earlier for
+something else. To turn it off (PowerShell **as administrator**, then
+**reboot**):
 
 ```powershell
 bcdedit /set testsigning off
 ```
 
-Potem włącz z powrotem Secure Boot w firmware.
+Then re-enable Secure Boot in the firmware.
 
-### Aplikacja
+### The application
 
-Nie instaluje się nigdzie — wystarczy skasować katalog `build` i
+It installs nothing anywhere — delete the `build` directory and
 `%APPDATA%\RadioVoice`.
 
-### Narzędzia
+### The tools
 
 ```powershell
 winget uninstall Microsoft.WindowsWDK.10.0.26100
