@@ -27,6 +27,33 @@ using namespace rv::gui;
 
 constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
 
+/// Draws text, shortened with an ellipsis when it will not fit.
+///
+/// Needed wherever a name of unknown length shares a row with controls that
+/// must stay reachable: ImGui neither wraps nor clips inline text, so a long
+/// vendor name would otherwise run underneath the buttons beside it.
+void textFitted(const char* text, float maxWidth)
+{
+    if (maxWidth <= 0.0f)
+        return;
+
+    if (ImGui::CalcTextSize(text).x <= maxWidth) {
+        ImGui::TextUnformatted(text);
+        return;
+    }
+
+    std::string shortened = text;
+    while (!shortened.empty() &&
+           ImGui::CalcTextSize((shortened + "...").c_str()).x > maxWidth)
+        shortened.pop_back();
+
+    shortened += "...";
+    ImGui::TextUnformatted(shortened.c_str());
+
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", text);
+}
+
 /// Configuration is written at most this often while knobs are moving; the
 /// pending state is always flushed on exit.
 constexpr double kSaveIntervalSeconds = 3.0;
@@ -375,6 +402,31 @@ void App::buildChainFromConfig()
         node->setBypassed(entry.bypassed);
         chainNodes_.push_back(std::move(node));
     }
+
+    // The built-in modules are part of the signal path, not optional additions,
+    // so any that a stored configuration is missing are appended rather than
+    // left out. That covers a configuration written by an older build - which
+    // did let them be deleted - and it means the only way to take one out of
+    // the path is to switch it off, which is reversible in one click and keeps
+    // its position in the order.
+    //
+    // Appended, not inserted at their canonical position: wherever the chain
+    // was left, adding to the end is the one placement that cannot silently
+    // reorder anything the user arranged deliberately.
+    const auto ensure = [this](dsp::NodeKind kind, auto make) {
+        const bool present = std::any_of(
+            chainNodes_.begin(), chainNodes_.end(),
+            [kind](const dsp::NodePtr& n) { return n->kind() == kind; });
+        if (!present)
+            chainNodes_.push_back(make());
+    };
+
+    ensure(dsp::NodeKind::Gate,
+           [this] { return std::make_shared<dsp::NoiseGate>(params_, meters_); });
+    ensure(dsp::NodeKind::Equalizer,
+           [this] { return std::make_shared<dsp::GraphicEq>(params_); });
+    ensure(dsp::NodeKind::Compressor,
+           [this] { return std::make_shared<dsp::Compressor>(params_, meters_); });
 
     publishChain();
 }
@@ -1766,19 +1818,49 @@ void App::renderChainPanel()
             }
         }
 
+        // The trailing controls are right-aligned against a width measured from
+        // the widgets themselves rather than a constant.
+        //
+        // The previous fixed offset was wrong twice over: it was subtracted
+        // from GetContentRegionAvail, which after SameLine is the space *left*
+        // rather than the row's width, and it assumed one set of buttons when a
+        // plugin row carries two more than a built-in one. Both errors put the
+        // switch on top of the label.
+        const ImGuiStyle& style = ImGui::GetStyle();
+
+        auto smallButtonWidth = [&style](const char* text) {
+            return ImGui::CalcTextSize(text).x + style.FramePadding.x * 2.0f;
+        };
+
+        // Matches the geometry inside toggleSwitch.
+        float trailing = ImGui::GetFrameHeight() * 0.75f * 1.9f;
         if (isPlugin) {
-            auto* plugin = static_cast<host::Vst3Plugin*>(node.get());
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-            ImGui::TextUnformatted(plugin->descriptor().vendor.c_str());
-            ImGui::PopStyleColor();
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-            ImGui::TextUnformatted("built-in");
-            ImGui::PopStyleColor();
+            trailing += style.ItemSpacing.x + smallButtonWidth("UI");
+            trailing += style.ItemSpacing.x + smallButtonWidth("Params");
         }
+        if (isPlugin)
+            trailing += style.ItemSpacing.x + smallButtonWidth("X");
+
+        // The right edge in window-local coordinates, which is what
+        // SetCursorPosX speaks. Taken while the cursor is still at the start of
+        // the row, because GetContentRegionAvail measures from wherever the
+        // cursor happens to be.
+        const float labelLeft = ImGui::GetCursorPosX();
+        const float rowRight  = labelLeft + ImGui::GetContentRegionAvail().x;
+        const float labelRoom = rowRight - labelLeft - trailing - style.ItemSpacing.x;
+
+        const char* subtitle = isPlugin
+            ? static_cast<host::Vst3Plugin*>(node.get())->descriptor().vendor.c_str()
+            : "built-in";
+
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        textFitted(subtitle, labelRoom);
+        ImGui::PopStyleColor();
 
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 150);
+        // Never left of where the label ended: on a very narrow panel the
+        // controls run out of the row rather than sitting on top of the text.
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rowRight - trailing));
 
         // The switch reads as "enabled", not "bypassed": on and lit means the
         // module is doing something. The inverse - a lit switch meaning the
@@ -1806,11 +1888,19 @@ void App::renderChainPanel()
                 inspectedPlugin_ = (inspectedPlugin_ == plugin) ? nullptr : plugin;
         }
 
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
-        if (ImGui::SmallButton("X"))
-            removeIndex = i;
-        ImGui::PopStyleColor();
+        // Only a plugin can be taken out. The built-in modules are the signal
+        // path itself; removing one leaves a state the user has to know to
+        // recover from, while switching it off does the same to the sound, in
+        // one click, without losing where it sat in the order. That order is
+        // the whole reason it matters - an EQ after a plugin is a different
+        // sound from an EQ before it.
+        if (isPlugin) {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
+            if (ImGui::SmallButton("X"))
+                removeIndex = i;
+            ImGui::PopStyleColor();
+        }
 
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -1828,35 +1918,9 @@ void App::renderChainPanel()
     if (removeIndex != SIZE_MAX)
         removeNode(removeIndex);
 
-    // --- built-in modules that are not in the chain ------------------------
-    const bool hasGate = std::any_of(chainNodes_.begin(), chainNodes_.end(),
-                                     [](const dsp::NodePtr& n) {
-                                         return n->kind() == dsp::NodeKind::Gate;
-                                     });
-    const bool hasEq = std::any_of(chainNodes_.begin(), chainNodes_.end(),
-                                   [](const dsp::NodePtr& n) {
-                                       return n->kind() == dsp::NodeKind::Equalizer;
-                                   });
-    const bool hasComp = std::any_of(chainNodes_.begin(), chainNodes_.end(),
-                                     [](const dsp::NodePtr& n) {
-                                         return n->kind() == dsp::NodeKind::Compressor;
-                                     });
-
-    if (!hasGate || !hasEq || !hasComp) {
-        ImGui::Separator();
-        if (!hasGate && ImGui::SmallButton("Add noise gate")) {
-            chainNodes_.push_back(std::make_shared<dsp::NoiseGate>(params_, meters_));
-            publishChain();
-        }
-        if (!hasEq && ImGui::SmallButton("Add equalizer")) {
-            chainNodes_.push_back(std::make_shared<dsp::GraphicEq>(params_));
-            publishChain();
-        }
-        if (!hasComp && ImGui::SmallButton("Add compressor")) {
-            chainNodes_.push_back(std::make_shared<dsp::Compressor>(params_, meters_));
-            publishChain();
-        }
-    }
+    // No "add the built-ins back" controls: they cannot leave the chain any
+    // more, so there is nothing to add. buildChainFromConfig appends any that
+    // an older configuration is missing.
 
     if (inspectedPlugin_) {
         ImGui::Separator();
