@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -8,6 +9,7 @@
 #include "audio/DeviceEnumerator.h"
 #include "audio/Engine.h"
 #include "core/Params.h"
+#include "core/Updater.h"
 #include "gui/Theme.h"
 #include "host/PluginScanner.h"
 #include "host/vst3/Vst3Plugin.h"
@@ -79,6 +81,32 @@ public:
     /// would otherwise be lost on a hard shutdown.
     void saveConfigNow();
 
+    // --- updates -------------------------------------------------------------
+    //
+    // Also for the platform layer: the window may be hidden for days at a time,
+    // which is exactly when an update is worth mentioning, and it is the layer
+    // that owns the notification icon that can mention it.
+
+    /// Whether a verified installer is sitting on disk, waiting to be run.
+    bool updateReady() const;
+
+    /// Version that installer carries, or empty.
+    std::string updateVersion() const;
+
+    /// Asks for the downloaded installer to be started once this process is
+    /// down, and requests exit. Setup replaces the executable this application
+    /// is running from, so it cannot be started from here.
+    void requestUpdateInstall();
+
+    /// What the platform layer should launch after everything is shut down, or
+    /// empty when no update was asked for.
+    const std::filesystem::path& pendingInstaller() const { return pendingInstaller_; }
+
+    /// True once per newly downloaded version, so that the tray icon can say so
+    /// exactly once. The window being on screen is not checked here - the caller
+    /// knows whether the interface has already shown it.
+    bool takeUpdateAnnouncement(std::string& version);
+
 private:
     // --- panels -----------------------------------------------------------
     void renderTopBar();
@@ -102,6 +130,10 @@ private:
 
     /// Contents of the popup behind the "Tray" button.
     void renderTrayMenu();
+
+    /// Contents of the popup behind the version button: what this build is, and
+    /// everything to do with replacing it.
+    void renderVersionMenu();
 
     // --- device helpers ---------------------------------------------------
     /// Picks a monitor device when none is chosen yet, preferring the system
@@ -158,6 +190,7 @@ private:
     std::unique_ptr<audio::Engine> engine_;
     audio::DeviceEnumerator        devices_;
     host::PluginScanner            scanner_;
+    Updater                        updater_;
 
     /// UI-side mirror of the chain, in order. The engine holds borrowed
     /// pointers to the same nodes.
@@ -209,6 +242,13 @@ private:
 
     /// Set when the engine last failed to start, shown until the next attempt.
     std::string startupError_;
+
+    /// Installer to run after this process has exited; see `pendingInstaller`.
+    std::filesystem::path pendingInstaller_;
+
+    /// Version the notification icon has already announced, so that a balloon
+    /// appears once per update rather than once per second.
+    std::string announcedUpdate_;
 };
 
 } // namespace rv::app

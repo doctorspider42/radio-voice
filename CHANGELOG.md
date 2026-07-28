@@ -9,6 +9,33 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.3.0] — 2026-07-28
+
+### Added
+
+- **RadioVoice now tells you when there is a newer version.** The button at the
+  right of the top bar shows which build you are running; once a day it asks
+  GitHub whether a newer release exists, and lights up when one does. The release
+  notes for it are shown in place, so there is something to decide on.
+- **One click downloads it, and one more installs it.** The installer is fetched
+  into `%APPDATA%\RadioVoice\updates` and checked against the size and the
+  SHA-256 that GitHub publishes for it; anything that disagrees is thrown away.
+  Installing closes RadioVoice, runs the installer without a wizard to click
+  through, and starts it again — devices, chain, plugin state and settings all
+  where you left them.
+- Nothing is downloaded or installed on its own. The daily check is one request
+  for the release list, and the checkbox behind the same button stops even that,
+  after which RadioVoice does not touch the network at all.
+- With the window hidden — which is where a tray application spends most of its
+  life — a downloaded update is announced once by the notification icon, and its
+  menu grows an **Install update** item.
+
+Worth knowing before you use it: Windows asks for permission when the installer
+runs, and names an unknown publisher. RadioVoice lives under Program Files
+because the driver component has to, and the installer is unsigned for the same
+reason the driver is. An update is TLS to GitHub plus a published checksum, not a
+signature — installing by hand from the releases page remains exactly as good.
+
 ## [0.2.2] — 2026-07-28
 
 ### Added

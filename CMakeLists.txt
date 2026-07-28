@@ -103,7 +103,10 @@ target_link_libraries(RadioVoice PRIVATE
     winmm avrt
     dsound dxguid
     d3d11 dxgi d3dcompiler
-    shlwapi shell32 dwmapi comdlg32 user32 gdi32)
+    shlwapi shell32 dwmapi comdlg32 user32 gdi32
+    # The updater: WinHTTP fetches the release list and the installer, bcrypt
+    # checks the SHA-256 GitHub publishes alongside it. Both ship with Windows.
+    winhttp bcrypt)
 
 if(TARGET rv::vst3sdk)
     target_link_libraries(RadioVoice PRIVATE rv::vst3sdk)

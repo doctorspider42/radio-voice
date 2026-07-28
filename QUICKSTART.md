@@ -354,6 +354,17 @@ If you have a single microphone in one side of a stereo input, set the input
 fold-down (under the microphone selector) to **Mono (left)** or **Mono (right)**,
 or the voice will come out on one side only.
 
+**Updates.** The button showing the version, at the right of the top bar, lights
+up when a newer release exists — RadioVoice asks GitHub once a day. It stops
+there until you click: **Download it** fetches the installer and checks it
+against the checksum GitHub published, **Install and restart** runs it and brings
+RadioVoice back with everything where you left it. Windows will ask for
+permission at that point, naming an unknown publisher, for the same reason the
+driver is unsigned. Both the checking and the rest are optional — the checkbox
+behind the same button turns the whole thing off, and installing by hand from the
+releases page does exactly the same job. The README has the
+[longer version](README.md#updating).
+
 ---
 
 ## 6. When something does not work
@@ -428,7 +439,8 @@ Installed from the installer, use *Apps → Installed apps → RadioVoice →
 Uninstall*. That removes the program, the shortcuts and the autostart entry, and
 removes the driver too if it installed one. `%APPDATA%\RadioVoice` is left
 behind on purpose — it holds your chain and your plugin state — so delete it by
-hand if you want it gone.
+hand if you want it gone. Its `updates` subfolder holds at most one downloaded
+installer, replaced by the next one; deleting it costs nothing.
 
 ### The tools
 

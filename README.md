@@ -119,6 +119,12 @@ does, and whether RadioVoice starts with Windows are all under **Tray** in the
 top bar. Launching a second copy shows the first rather than contending for the
 same devices.
 
+**Updates** — once a day RadioVoice asks GitHub which release is the newest, and
+says so on the version button in the top bar. Nothing is downloaded until you
+click **Download it**, and nothing is installed until you click **Install and
+restart**; the whole thing can be turned off with one checkbox behind the same
+button. See [Updating](#updating).
+
 Configuration, the chain and plugin state are saved to
 `%APPDATA%\RadioVoice\config.json`. The log is `%APPDATA%\RadioVoice\radiovoice.log`.
 
@@ -132,6 +138,43 @@ A plugin can take the process down as it loads, so the scanner writes the bundle
 it is about to touch into a sentinel file and clears it afterwards. If that file
 survives a restart, the bundle is blacklisted instead of being tried again. The
 blacklist can be cleared from the same window.
+
+---
+
+## Updating
+
+The button on the right of the top bar shows the version this build is. Behind
+it is everything to do with replacing it.
+
+There is no update server. RadioVoice reads the same release list you would:
+`api.github.com/repos/doctorspider42/radio-voice/releases/latest`, published by
+the workflow that builds the installer. A check is that one request and nothing
+else — it happens half a minute after start-up, then once a day, and only while
+**Check for updates automatically** is ticked. Untick it and RadioVoice never
+touches the network unless you press **Check now**.
+
+Nothing happens on its own beyond the check:
+
+1. A newer release lights the button up. The release notes shown are the
+   `CHANGELOG.md` section for that version.
+2. **Download it** fetches the installer into `%APPDATA%\RadioVoice\updates`. It
+   is checked against the size and the SHA-256 GitHub publishes for the asset,
+   and rejected if either disagrees. If the window is hidden when the download
+   finishes, the notification icon says so once.
+3. **Install and restart** closes RadioVoice, runs the installer silently and
+   starts RadioVoice again when it is done. Your devices, chain, plugin state and
+   settings are kept — the installer is an upgrade in place, not a reinstall.
+
+**Windows will ask for permission at step 3**, and there is no way around it:
+RadioVoice installs under Program Files because the driver component has to, and
+writing there needs elevation. The installer is also unsigned — the same reason
+the driver is — so the prompt names an unknown publisher.
+
+That is worth being clear about: an update is TLS to GitHub and a checksum
+published beside the file, not a signature. If you would rather see what you are
+running before you run it, untick automatic checking and take the installer from
+the [releases page](https://github.com/doctorspider42/radio-voice/releases) by
+hand. Installing over an existing copy works exactly the same way.
 
 ---
 
