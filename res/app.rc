@@ -1,7 +1,12 @@
 #include <windows.h>
 
+#include "resource.h"
+
 // CREATEPROCESS_MANIFEST_RESOURCE_ID (1) / RT_MANIFEST (24)
 1 24 "app.manifest"
+
+// Multi-resolution, from 16x16 up to 256x256; regenerate with tools/make-icon.py.
+IDI_APPICON ICON "RadioVoice.ico"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     0,1,0,0

@@ -72,6 +72,14 @@ cmake --build --preset mingw
 
 Warianty: `build.cmd reldbg` (Release + symbole), `debug`, `msvc`, `no-vst3`.
 
+### Ikona
+
+`res/RadioVoice.ico` jest wersjonowana i wchodzi do pliku wykonywalnego przez
+`res/app.rc`, więc zwykły build nic z nią nie robi. Rysuje ją
+`tools/make-icon.py` (wymaga Pillow) — każdy rozmiar od 16 do 256 px osobno,
+bo kreski czytelne przy 256 px przy 16 px zlewają się w plamę. Po zmianie
+grafiki trzeba uruchomić skrypt i zacommitować wynikowy `.ico`.
+
 ### ASIO
 
 Działa od razu, bez dodatkowych kroków. Od wersji 2.3.4 SDK ASIO jest
