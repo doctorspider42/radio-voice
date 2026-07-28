@@ -10,6 +10,7 @@
 
 #include <imgui.h>
 
+#include "core/Autostart.h"
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Strings.h"
@@ -195,6 +196,41 @@ void App::setWindowSize(int width, int height)
         config_.windowHeight = height;
         markDirty();
     }
+}
+
+void App::toggleEngine()
+{
+    if (!engine_)
+        return;
+
+    if (engine_->isRunning())
+        stopEngine();
+    else
+        startEngine();
+}
+
+std::string App::trayTooltip() const
+{
+    // NOTIFYICONDATA::szTip holds 128 characters, so there is room; what there
+    // is no room for is a second line the shell would clip.
+    if (!isEngineRunning())
+        return "RadioVoice - stopped";
+    if (isMuted())
+        return "RadioVoice - muted";
+    return "RadioVoice - running";
+}
+
+void App::saveConfigNow()
+{
+    if (!engine_)
+        return;
+
+    captureChainToConfig();
+    config_.captureFrom(params_);
+    config_.save();
+
+    configDirty_  = false;
+    lastSaveTime_ = ImGui::GetTime();
 }
 
 void App::markDirty()
@@ -720,12 +756,13 @@ void App::renderTopBar()
         const float buttonWidth  = px(84.0f);
         const float restartWidth = px(84.0f);
         const float logWidth     = px(62.0f);
+        const float trayWidth    = px(62.0f);
         const float spacing      = ImGui::GetStyle().ItemSpacing.x;
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
                              monitorWidth - buttonWidth - restartWidth - logWidth -
-                             spacing * 3);
+                             trayWidth - spacing * 4);
 
         // Monitoring is the one routing decision an operator changes mid-take -
         // headphones on to check a plugin, off again when it feeds back - so it
@@ -802,6 +839,16 @@ void App::renderTopBar()
             showLog_ = !showLog_;
         if (problems > 0)
             ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Tray", ImVec2(trayWidth, 0)))
+            ImGui::OpenPopup("##tray");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("What happens to the window, and to the engine behind it.");
+        if (ImGui::BeginPopup("##tray")) {
+            renderTrayMenu();
+            ImGui::EndPopup();
+        }
     }
 
     if (!startupError_.empty()) {
@@ -2192,6 +2239,55 @@ void App::renderPluginParameters()
 // ---------------------------------------------------------------------------
 // Transport bar
 // ---------------------------------------------------------------------------
+
+void App::renderTrayMenu()
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
+    ImGui::TextUnformatted("NOTIFICATION AREA");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    if (ImGui::Checkbox("Show an icon in the notification area", &config_.trayEnabled))
+        markDirty();
+
+    ImGui::BeginDisabled(!config_.trayEnabled);
+
+    if (ImGui::Checkbox("Minimising hides the window", &config_.minimizeToTray))
+        markDirty();
+
+    if (ImGui::Checkbox("Closing hides the window", &config_.closeToTray))
+        markDirty();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("The window's X then puts RadioVoice away instead of\n"
+                          "shutting it down. Quit from the tray icon's menu.");
+
+    if (ImGui::Checkbox("Start with no window", &config_.startMinimized))
+        markDirty();
+
+    ImGui::EndDisabled();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Read from the registry rather than mirrored into the configuration: the
+    // installer writes the same entry, and a copy here would go stale the first
+    // time the two disagreed.
+    bool startWithWindows = autostart::enabled();
+    if (ImGui::Checkbox("Start with Windows", &startWithWindows))
+        autostart::setEnabled(startWithWindows);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A per-user entry under Run, pointing at this executable\n"
+                          "with --minimized. The installer's option writes the same\n"
+                          "one, so the two cannot drift apart.");
+    }
+
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+    ImGui::TextWrapped("Hiding the window changes nothing about the audio path - "
+                       "the microphone carries on being processed.");
+    ImGui::PopStyleColor();
+}
 
 void App::renderTransportBar()
 {

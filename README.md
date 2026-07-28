@@ -11,11 +11,20 @@ C++20, Dear ImGui and Direct3D 11. WASAPI, ASIO and DirectSound backends.
 
 ## Quickstart
 
+Grab the installer from
+[Releases](https://github.com/doctorspider42/radio-voice/releases) and run it.
+It can put RadioVoice in the notification area at sign-in, and it offers to
+install the virtual audio driver — read the page it shows you before accepting
+that part.
+
+Or build it:
+
 ```bash
 build.cmd
 ```
 
-Then run `build\bin\RadioVoice.exe`.
+Then run `build\bin\RadioVoice.exe`. To produce an installer of your own,
+`make-installer.cmd` (see [installer/README.md](installer/README.md)).
 
 To get the processed signal into Discord, OBS, Teams or anything else, it has to
 reach a virtual audio device. Pick one:
@@ -103,6 +112,13 @@ level and mute. Starts and stops without restarting the engine.
 selector, and a sum-to-mono switch under the output. The first is for a single
 microphone plugged into one side of a stereo input.
 
+**Notification area** — the window and the engine are independent. Hide the
+window and your microphone carries on being processed; the icon's menu offers
+mute, start/stop and exit. Whether minimising hides the window, whether closing
+does, and whether RadioVoice starts with Windows are all under **Tray** in the
+top bar. Launching a second copy shows the first rather than contending for the
+same devices.
+
 Configuration, the chain and plugin state are saved to
 `%APPDATA%\RadioVoice\config.json`. The log is `%APPDATA%\RadioVoice\radiovoice.log`.
 
@@ -164,10 +180,73 @@ through `res/app.rc`; a normal build does not regenerate it. `tools/make-icon.py
 the other — a functional equivalent of VB-CABLE with no external dependency.
 48 kHz, 16- or 24-bit, stereo.
 
-Installing it requires Secure Boot off and test signing on, or a commercial EV
-certificate. `install-driver.cmd` and `uninstall-driver.cmd` in the repository
-root handle build, signing and installation; the full procedure and the
-diagnostic tooling are in [`driver/README.md`](driver/README.md).
+Installing it requires Secure Boot off and test signing on. There is no way
+around that short of a Microsoft signature — see
+[below](#can-it-be-installed-without-test-signing).
+
+Each of the two things you might want is one command. Both need the WDK, both
+elevate themselves, and both will ask before changing anything:
+
+```bash
+install-driver.cmd
+```
+
+Builds, signs and installs the driver **on this machine** — the whole procedure,
+including creating the signing certificate the first time. `uninstall-driver.cmd`
+reverses it.
+
+```bash
+make-installer.cmd with-driver
+```
+
+Builds, signs and folds the driver **into the installer**, so the resulting
+`dist\RadioVoice-<version>-setup.exe` can offer it to someone else. Without
+`with-driver` the installer is built with whatever is already in `driver\build`,
+and if that is nothing, it simply does not offer the component.
+
+The full procedure step by step, and the diagnostic tooling, are in
+[`driver/README.md`](driver/README.md).
+
+### What it costs
+
+Both routes end in the same two changes to the machine, and it is worth being
+plain about them:
+
+- **Test signing on**, which means the machine accepts any kernel driver signed
+  by a certificate its own store trusts. One of the layers protecting against
+  rootkits stops applying.
+- **A certificate in `LocalMachine\Root`**, which means everything signed with
+  that key is trusted from then on — not only this driver.
+
+Both are reversible, and the installer refuses to proceed until you have said
+you understand them. If you would rather not,
+[VB-CABLE](https://vb-audio.com/Cable/) does the same job and RadioVoice works
+with it just as well.
+
+### Can it be installed without test signing?
+
+No — and knowing what you are doing does not change it. The check lives in the
+kernel, and being deliberate about it is not one of the inputs.
+
+**Trusting the certificate is not enough, and fails in the worst way.** Putting
+the `.cer` into `LocalMachine\Root` satisfies the user-mode check, so the
+package installs and reports success. The kernel then applies a separate,
+stricter policy that accepts only Microsoft-issued signatures, refuses the
+image, and the device sits in Device Manager with code 52. Nothing says which
+of the two checks failed.
+
+The only route to a driver that loads on an ordinary machine is a signature from
+Microsoft, via
+[attestation signing](https://learn.microsoft.com/en-us/windows-hardware/drivers/dashboard/code-signing-attestation):
+an EV code-signing certificate, a Partner Center account, and the driver
+submitted to the Hardware Dev Center. No HLK test run is needed for attestation,
+but the EV certificate is
+[not optional](https://learn.microsoft.com/en-us/windows-hardware/drivers/dashboard/driver-signing-offerings)
+— it is what the submission is authenticated with. Cross-signing, the old way
+round this, stopped working in Windows 10 1809.
+
+So: test signing, or money. If neither appeals, VB-CABLE is WHQL-signed and
+installs on any machine without touching a boot setting.
 
 ---
 
@@ -184,7 +263,9 @@ Known gaps:
 - **ASIO** compiles and enumerates drivers; an ASIO stream has not been opened
   on this machine.
 - **WASAPI exclusive mode** is implemented but untested.
-- **MSVC** builds of the application are configured but only MinGW has been run.
+- **MSVC** builds do not currently work: rnnoise's SSE4.1 sources and the VST3
+  SDK's `char8_t` usage both fail under `cl`. MinGW is the supported toolchain,
+  and the one the release workflow uses.
 - Moving the window between displays of different DPI is handled but has not
   been exercised on a multi-monitor setup.
 

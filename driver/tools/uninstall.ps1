@@ -17,8 +17,33 @@ $toolsRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSC
 Assert-Elevated 'Removing a driver'
 
 Write-Host "Removing the device..."
-$devcon = Find-KitTool 'devcon.exe'
-& $devcon remove 'root\RadioVoiceAudio'
+
+# devcon ships only with the WDK, which the machine running the installer does
+# not have. Remove-PnpDevice is in the box on every version this driver targets
+# and does the same thing, so devcon is used where it exists and not missed
+# where it does not.
+$devcon = $null
+try { $devcon = Find-KitTool 'devcon.exe' } catch { }
+
+if ($devcon) {
+    & $devcon remove 'root\RadioVoiceAudio'
+} else {
+    $devices = Get-PnpDevice -ErrorAction SilentlyContinue |
+               Where-Object { $_.InstanceId -like 'ROOT\MEDIA\*' -and
+                              $_.FriendlyName -like '*RadioVoice*' }
+
+    if (-not $devices) {
+        Write-Host "  no RadioVoice device found."
+    } else {
+        foreach ($device in $devices) {
+            Write-Host "  removing $($device.InstanceId)"
+            # -Confirm:$false because this runs unattended from the uninstaller,
+            # where a prompt nobody can see is a hang.
+            Remove-PnpDevice -InstanceId $device.InstanceId -Confirm:$false `
+                             -ErrorAction Stop
+        }
+    }
+}
 
 Write-Host ""
 Write-Host "Deleting the driver package from the store..."

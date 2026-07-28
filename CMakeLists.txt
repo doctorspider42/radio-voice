@@ -1,9 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
 
+# The version is written down exactly once, in VERSION at the repository root.
+# Everything that needs it - the executable's resource block, the installer, the
+# release tag - reads it from here, so a bump cannot be applied to three places
+# and forgotten in the fourth.
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/VERSION RV_VERSION_FILE)
+string(STRIP "${RV_VERSION_FILE}" RV_VERSION_FILE)
+
 project(RadioVoice
-    VERSION 0.1.0
+    VERSION ${RV_VERSION_FILE}
     DESCRIPTION "Real-time microphone processor with VST3 plugin chain"
     LANGUAGES C CXX)
+
+# Re-configure when VERSION changes, which a plain file(READ) does not cause.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/VERSION)
 
 # ---------------------------------------------------------------------------
 # Options
@@ -65,9 +76,16 @@ endif()
 
 add_executable(RadioVoice WIN32 ${RV_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/res/app.rc)
 
+# The .rc is left in the source tree rather than generated, so that its relative
+# references to app.manifest and the icon keep resolving; only the version
+# numbers it needs are generated, as a header it includes.
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/res/rv_version.h.in
+               ${CMAKE_BINARY_DIR}/generated/rv_version.h @ONLY)
+
 target_include_directories(RadioVoice PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/res)   # so the .rc can find app.manifest
+    ${CMAKE_CURRENT_SOURCE_DIR}/res    # so the .rc can find app.manifest
+    ${CMAKE_BINARY_DIR}/generated)     # ... and the generated rv_version.h
 
 target_compile_definitions(RadioVoice PRIVATE
     WIN32_LEAN_AND_MEAN
@@ -127,8 +145,15 @@ else()
         $<$<NOT:$<CONFIG:Debug>>:-O3 -ffp-contract=fast -fno-math-errno>)
     # -municode selects the wide-character CRT startup so that wWinMain is the
     # entry point; static runtime keeps the executable portable.
+    #
+    # -static, and not merely -static-libgcc -static-libstdc++. Those two leave
+    # libwinpthread-1.dll behind as a runtime dependency, because MinGW's
+    # libstdc++ is built against the POSIX threading model. On the machine that
+    # compiled it that DLL is on PATH beside the compiler, so nothing looks
+    # wrong; installed anywhere else the process dies before main with
+    # 0xc0000142, which names neither the DLL nor the reason.
     target_link_options(RadioVoice PRIVATE
-        -municode -static-libgcc -static-libstdc++ -Wl,--gc-sections)
+        -municode -static -static-libgcc -static-libstdc++ -Wl,--gc-sections)
 
     # A plain Release build is what gets handed to someone else, so the symbol
     # table goes too. Use the reldbg preset when a stack trace matters more

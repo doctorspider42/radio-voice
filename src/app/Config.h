@@ -52,6 +52,20 @@ struct Config {
     int windowWidth  = 1360;
     int windowHeight = 840;
 
+    /// Notification-area behaviour.
+    ///
+    /// The processor is useful with nothing on screen: it sits between the
+    /// microphone and whatever is listening, and once it is set up there is
+    /// rarely anything to look at. So the window being gone and the engine
+    /// being stopped are deliberately separate events - closing the window with
+    /// `closeToTray` on leaves the audio path exactly where it was.
+    bool trayEnabled    = true;
+    bool minimizeToTray = true;
+    bool closeToTray    = false;
+    /// Start with no window shown. Set by the installer's "start with Windows"
+    /// shortcut, which passes --minimized, and settable from the tray menu.
+    bool startMinimized = false;
+
     /// Whether the side panels are folded away to a narrow strip.
     bool chainCollapsed = false;
     bool ioCollapsed    = false;
