@@ -336,6 +336,58 @@ void statusPill(const char* text, ImU32 colour)
     draw->AddText(ImVec2(origin.x + padding.x, origin.y + padding.y), colour, text);
 }
 
+bool gearButton(const char* id, float size, ImU32 tint, bool lit)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 origin     = ImGui::GetCursorScreenPos();
+
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held    = ImGui::IsItemActive() || lit;
+
+    // The frame is drawn by hand rather than by ImGui::Button so that the cog
+    // can sit on top of it, but it takes its colours from the style: the
+    // neighbouring Start and Restart buttons must not look like a different
+    // control.
+    ImDrawList* draw  = ImGui::GetWindowDrawList();
+    const ImU32 frame = ImGui::GetColorU32(held      ? ImGuiCol_ButtonActive
+                                           : hovered ? ImGuiCol_ButtonHovered
+                                                     : ImGuiCol_Button);
+    const ImVec2 corner(origin.x + size, origin.y + size);
+    draw->AddRectFilled(origin, corner, frame, style.FrameRounding);
+    if (style.FrameBorderSize > 0.0f) {
+        draw->AddRect(origin, corner, ImGui::GetColorU32(ImGuiCol_Border),
+                      style.FrameRounding, style.FrameBorderSize);
+    }
+
+    const ImVec2 centre(origin.x + size * 0.5f, origin.y + size * 0.5f);
+    const float body  = size * 0.24f;
+    const float tooth = body * 1.45f;
+    const float hole  = body * 0.42f;
+
+    // Eight teeth: fewer reads as a flower at this size, more turns into a
+    // circle. Each is a quad, so it stays convex and fills cleanly.
+    constexpr int kTeeth = 8;
+    for (int i = 0; i < kTeeth; ++i) {
+        const float angle = (2.0f * kPi * static_cast<float>(i)) / kTeeth;
+        const float base  = 0.20f; ///< Half-width at the root, in radians.
+        const float tip   = 0.13f; ///< Narrower at the tip, so it reads as a cog.
+
+        auto point = [&](float offset, float radius) {
+            return ImVec2(centre.x + std::cos(angle + offset) * radius,
+                          centre.y + std::sin(angle + offset) * radius);
+        };
+
+        draw->AddQuadFilled(point(-base, body * 0.9f), point(base, body * 0.9f),
+                            point(tip, tooth), point(-tip, tooth), tint);
+    }
+
+    draw->AddCircleFilled(centre, body, tint, 24);
+    draw->AddCircleFilled(centre, hole, frame, 16);
+
+    return pressed;
+}
+
 void rightLabel(const char* text, ImU32 colour)
 {
     const float width = ImGui::CalcTextSize(text).x;

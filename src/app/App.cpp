@@ -797,15 +797,13 @@ void App::renderTopBar()
         const float monitorWidth = px(92.0f);
         const float buttonWidth  = px(84.0f);
         const float restartWidth = px(84.0f);
-        const float logWidth     = px(62.0f);
-        const float trayWidth    = px(62.0f);
-        const float versionWidth = px(78.0f);
+        const float gearWidth    = ImGui::GetFrameHeight();
         const float spacing      = ImGui::GetStyle().ItemSpacing.x;
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
-                             monitorWidth - buttonWidth - restartWidth - logWidth -
-                             trayWidth - versionWidth - spacing * 5);
+                             monitorWidth - buttonWidth - restartWidth - gearWidth -
+                             spacing * 3);
 
         // Monitoring is the one routing decision an operator changes mid-take -
         // headphones on to check a plugin, off again when it feeds back - so it
@@ -874,79 +872,59 @@ void App::renderTopBar()
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Stops and reopens both audio devices.");
 
+        // Everything that is set once and then forgotten - the log, the version,
+        // and where the window goes when it is dismissed - lives behind the cog.
+        // The transport bar is read at a glance while talking, and more words of
+        // chrome there cost more than the click they save.
         ImGui::SameLine();
-        const int problems = log::problemCount();
-        if (problems > 0)
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-        if (ImGui::Button("Log", ImVec2(logWidth, 0)))
-            showLog_ = !showLog_;
-        if (problems > 0)
-            ImGui::PopStyleColor();
+        const int  problems = log::problemCount();
+        const auto update   = updater_.status();
+        const bool open     = ImGui::IsPopupOpen("##options");
 
-        ImGui::SameLine();
-        if (ImGui::Button("Tray", ImVec2(trayWidth, 0)))
-            ImGui::OpenPopup("##tray");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("What happens to the window, and to the engine behind it.");
-        if (ImGui::BeginPopup("##tray")) {
-            renderTrayMenu();
-            ImGui::EndPopup();
+        // Two things can want attention through one cog, so they are ranked
+        // rather than blended: something went wrong beats something is
+        // available, and the tooltip says which it is either way.
+        const bool waitingUpdate = update.state == Updater::State::Available ||
+                                   update.state == Updater::State::Downloading ||
+                                   update.state == Updater::State::Ready;
+
+        const ImU32 gearTint = problems > 0     ? theme::kWarning
+                               : waitingUpdate  ? theme::kAccent
+                                                : theme::kTextDim;
+
+        if (gearButton("##options-button", gearWidth, gearTint, open))
+            ImGui::OpenPopup("##options");
+
+        if (ImGui::IsItemHovered()) {
+            char note[192];
+            int  written = std::snprintf(note, sizeof(note),
+                                         "Options - the log, the version, and where "
+                                         "the window goes.");
+
+            if (problems > 0) {
+                written += std::snprintf(note + written, sizeof(note) - written,
+                                         "\n%d problem%s logged.", problems,
+                                         problems == 1 ? "" : "s");
+            }
+            if (update.state == Updater::State::Ready) {
+                std::snprintf(note + written, sizeof(note) - written,
+                              "\nVersion %s is ready to install.", update.version.c_str());
+            } else if (update.state == Updater::State::Available) {
+                std::snprintf(note + written, sizeof(note) - written,
+                              "\nVersion %s has been released.", update.version.c_str());
+            }
+
+            ImGui::SetTooltip("%s", note);
         }
 
-        // The version, and behind it everything to do with replacing it. It
-        // reads as a label until there is something to say, which is the only
-        // time it is worth anyone's attention.
-        {
-            const auto update = updater_.status();
-            const bool waiting = update.state == Updater::State::Available ||
-                                 update.state == Updater::State::Downloading ||
-                                 update.state == Updater::State::Ready;
-
-            char label[64];
-            if (update.state == Updater::State::Ready)
-                std::snprintf(label, sizeof(label), "Update##version");
-            else if (waiting)
-                std::snprintf(label, sizeof(label), "%s##version", update.version.c_str());
-            else
-                std::snprintf(label, sizeof(label), "v%s##version", RV_VERSION);
-
-            if (waiting) {
-                ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kAccentDim));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toVec4(theme::kAccent));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::toVec4(theme::kAccentFaint));
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button(label, ImVec2(versionWidth, 0)))
-                ImGui::OpenPopup("##version");
-
-            if (waiting)
-                ImGui::PopStyleColor(3);
-
-            if (ImGui::IsItemHovered()) {
-                switch (update.state) {
-                    case Updater::State::Available:
-                        ImGui::SetTooltip("Version %s has been released.", update.version.c_str());
-                        break;
-                    case Updater::State::Downloading:
-                        ImGui::SetTooltip("Downloading version %s...", update.version.c_str());
-                        break;
-                    case Updater::State::Ready:
-                        ImGui::SetTooltip("Version %s is downloaded and ready to install.",
-                                          update.version.c_str());
-                        break;
-                    default:
-                        ImGui::SetTooltip("This build, and whether there is a newer one.");
-                        break;
-                }
-            }
-
-            ImGui::SetNextWindowSizeConstraints(ImVec2(px(340.0f), 0.0f),
-                                                ImVec2(px(420.0f), FLT_MAX));
-            if (ImGui::BeginPopup("##version")) {
-                renderVersionMenu();
-                ImGui::EndPopup();
-            }
+        // Constrained because the update section inside can carry a paragraph of
+        // release notes, and an auto-sized popup holding one is either a column
+        // of single words or the width of the screen.
+        ImGui::SetNextWindowSizeConstraints(ImVec2(px(330.0f), 0.0f),
+                                            ImVec2(px(420.0f), FLT_MAX));
+        if (ImGui::BeginPopup("##options")) {
+            renderOptionsMenu();
+            ImGui::EndPopup();
         }
     }
 
@@ -2339,8 +2317,47 @@ void App::renderPluginParameters()
 // Transport bar
 // ---------------------------------------------------------------------------
 
-void App::renderTrayMenu()
+void App::renderOptionsMenu()
 {
+    // The log first: it is the one item here anyone opens twice, and the only
+    // one that ever has something to say. The count is spelled out because the
+    // cog can only turn amber - it cannot say how amber.
+    const int problems = log::problemCount();
+    char logLabel[64];
+    if (problems > 0) {
+        std::snprintf(logLabel, sizeof(logLabel), "Log - %d problem%s", problems,
+                      problems == 1 ? "" : "s");
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
+    } else {
+        std::snprintf(logLabel, sizeof(logLabel), "Log");
+    }
+    if (ImGui::MenuItem(logLabel, nullptr, showLog_))
+        showLog_ = !showLog_;
+    if (problems > 0)
+        ImGui::PopStyleColor();
+
+    // The one line of this menu that is an action rather than a setting, so it
+    // is only here while there is something to act on. The same decision can be
+    // reached from the section at the bottom; this is the version of it that
+    // does not need reading first.
+    if (updateReady()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kAccent));
+        char installLabel[64];
+        std::snprintf(installLabel, sizeof(installLabel), "Install update %s...",
+                      updateVersion().c_str());
+        if (ImGui::MenuItem(installLabel))
+            requestUpdateInstall();
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Closes RadioVoice, installs, and starts it again.\n"
+                              "Windows will ask for permission.");
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
     ImGui::TextUnformatted("NOTIFICATION AREA");
     ImGui::PopStyleColor();
@@ -2386,9 +2403,15 @@ void App::renderTrayMenu()
     ImGui::TextWrapped("Hiding the window changes nothing about the audio path - "
                        "the microphone carries on being processed.");
     ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    renderUpdateSection();
 }
 
-void App::renderVersionMenu()
+void App::renderUpdateSection()
 {
     const auto update = updater_.status();
 
@@ -2405,7 +2428,11 @@ void App::renderVersionMenu()
             return;
 
         ImGui::Spacing();
-        ImGui::BeginChild("##notes", ImVec2(0, px(150.0f)), ImGuiChildFlags_Borders);
+        // Sized rather than stretched: this sits in a popup that fits itself to
+        // its contents, and a child asking for "whatever is available" in one of
+        // those is a width defined in terms of itself.
+        ImGui::BeginChild("##notes", ImVec2(px(300.0f), px(150.0f)),
+                          ImGuiChildFlags_Borders);
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
         ImGui::TextWrapped("%s", update.notes.c_str());
         ImGui::PopStyleColor();
@@ -2459,7 +2486,7 @@ void App::renderVersionMenu()
             ImGui::ProgressBar(update.progress >= 0.0f
                                    ? update.progress
                                    : static_cast<float>(-1.0 * ImGui::GetTime()),
-                               ImVec2(-1.0f, 0.0f));
+                               ImVec2(px(300.0f), 0.0f));
             break;
 
         case Updater::State::Ready:

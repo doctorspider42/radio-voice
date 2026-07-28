@@ -128,12 +128,13 @@ private:
     void renderPluginParameters();
     void renderLogWindow();
 
-    /// Contents of the popup behind the "Tray" button.
-    void renderTrayMenu();
+    /// Contents of the popup behind the cog: the log, and where the window
+    /// goes when it is dismissed.
+    void renderOptionsMenu();
 
-    /// Contents of the popup behind the version button: what this build is, and
-    /// everything to do with replacing it.
-    void renderVersionMenu();
+    /// The tail of that popup: what this build is, and everything to do with
+    /// replacing it.
+    void renderUpdateSection();
 
     // --- device helpers ---------------------------------------------------
     /// Picks a monitor device when none is chosen yet, preferring the system

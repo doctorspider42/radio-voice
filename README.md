@@ -115,15 +115,15 @@ microphone plugged into one side of a stereo input.
 **Notification area** — the window and the engine are independent. Hide the
 window and your microphone carries on being processed; the icon's menu offers
 mute, start/stop and exit. Whether minimising hides the window, whether closing
-does, and whether RadioVoice starts with Windows are all under **Tray** in the
-top bar. Launching a second copy shows the first rather than contending for the
-same devices.
+does, and whether RadioVoice starts with Windows are all behind the **cog** in
+the top bar. Launching a second copy shows the first rather than contending for
+the same devices.
 
 **Updates** — once a day RadioVoice asks GitHub which release is the newest, and
-says so on the version button in the top bar. Nothing is downloaded until you
-click **Download it**, and nothing is installed until you click **Install and
-restart**; the whole thing can be turned off with one checkbox behind the same
-button. See [Updating](#updating).
+the cog turns blue when one has appeared. Nothing is downloaded until you click
+**Download it**, and nothing is installed until you click **Install and
+restart**; the whole thing can be turned off with one checkbox in the same
+place. See [Updating](#updating).
 
 Configuration, the chain and plugin state are saved to
 `%APPDATA%\RadioVoice\config.json`. The log is `%APPDATA%\RadioVoice\radiovoice.log`.
@@ -143,8 +143,10 @@ blacklist can be cleared from the same window.
 
 ## Updating
 
-The button on the right of the top bar shows the version this build is. Behind
-it is everything to do with replacing it.
+The cog on the right of the top bar holds the version this build is, and
+everything to do with replacing it. It turns blue when there is a newer release
+— amber still wins, because something in the log matters more — and its tooltip
+says which of the two it is.
 
 There is no update server. RadioVoice reads the same release list you would:
 `api.github.com/repos/doctorspider42/radio-voice/releases/latest`, published by
@@ -155,8 +157,10 @@ touches the network unless you press **Check now**.
 
 Nothing happens on its own beyond the check:
 
-1. A newer release lights the button up. The release notes shown are the
-   `CHANGELOG.md` section for that version.
+1. A newer release colours the cog. Under it, the release notes for that version
+   — which are its `CHANGELOG.md` section — and what to do about them. A ready
+   update also puts a one-line **Install update** at the top of that menu, and
+   into the notification icon's.
 2. **Download it** fetches the installer into `%APPDATA%\RadioVoice\updates`. It
    is checked against the size and the SHA-256 GitHub publishes for the asset,
    and rejected if either disagrees. If the window is hidden when the download
