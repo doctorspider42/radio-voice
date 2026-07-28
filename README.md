@@ -1,199 +1,195 @@
 # RadioVoice
 
-Procesor sygnału mikrofonowego czasu rzeczywistego dla Windows: bramka szumów,
-korekcja graficzna, limiter i **łańcuch wtyczek VST3**, z wyjściem kierowanym na
-urządzenie wirtualne, które inne aplikacje widzą jako mikrofon.
+Real-time microphone processor for Windows. Neural noise suppression, a noise
+gate, a graphic equaliser, a compressor, a brickwall limiter and a **reorderable
+VST3 plugin chain** — routed to a virtual device that other applications see as
+a microphone.
 
-Napisany w C++20, bez frameworków audio — backendy WASAPI i DirectSound są
-własne, interfejs oparty o Dear ImGui i Direct3D 11.
-
----
-
-## Jak to działa
-
-```
-mikrofon ──> WASAPI/ASIO/DirectSound capture
-                     │
-                     ▼
-              bufor pierścieniowy (lock-free)
-                     │
-                     ▼
-        resampler kompensujący dryf zegarów
-                     │
-                     ▼
-   gain ──> [ łańcuch: bramka | EQ | VST3 | VST3 ... ] ──> gain ──> limiter
-                     │
-                     ▼
-        WASAPI/ASIO/DirectSound render
-                     │
-                     ▼
-      urządzenie wirtualne  ──>  Discord / OBS / Teams / …
-```
-
-Wejście i wyjście to **dwa niezależne zegary**. Nawet gdy oba pracują nominalnie
-przy 48 kHz, realnie różnią się o kilkadziesiąt do kilku tysięcy ppm, więc jeden
-bufor po minutach by się przepełnił, a drugi zagłodził. Między nimi siedzi
-resampler o zmiennym współczynniku sterowany regulatorem PI, który utrzymuje
-zapełnienie bufora na zadanym poziomie. Aktualną korekcję widać w pasku
-statusu jako `drift`.
-
-Cały DSP wykonuje się na wątku urządzenia wyjściowego — tak jak w DAW. Osobny
-wątek roboczy odciążyłby łańcuch od terminu sprzętowego, ale kosztem kolejnego
-bufora opóźnienia w torze, który użytkownik odsłuchuje na żywo.
+C++20, Dear ImGui and Direct3D 11. WASAPI, ASIO and DirectSound backends.
 
 ---
 
-> **Chcesz to po prostu uruchomić?** [QUICKSTART.md](QUICKSTART.md) prowadzi od
-> zera do przetworzonego mikrofonu w Discordzie, razem z instalacją sterownika.
-
-## Wymagania
-
-- Windows 10 1903+ lub Windows 11 (x64)
-- CMake ≥ 3.24, Ninja
-- Kompilator: **MinGW-w64 GCC ≥ 13** albo **MSVC 2019+**
-- Sterownik graficzny z Direct3D 11 (feature level 10.0; awaryjnie WARP)
-
-Zależności (Dear ImGui, nlohmann/json, VST3 SDK) pobiera CMake na etapie
-konfiguracji — nic nie jest wersjonowane w repo. Potrzebny jest dostęp do sieci
-przy pierwszym `cmake -B`.
-
-## Budowanie
+## Quickstart
 
 ```bash
 build.cmd
 ```
 
-Wynik: `build/bin/RadioVoice.exe` (~2,8 MB). Albo przez CMake:
+Then run `build\bin\RadioVoice.exe`.
+
+To get the processed signal into Discord, OBS, Teams or anything else, it has to
+reach a virtual audio device. Pick one:
+
+**Using VB-CABLE** — install [VB-CABLE](https://vb-audio.com/Cable/), set
+**Output** to `CABLE Input`, and select `CABLE Output` as the microphone in the
+receiving application. RadioVoice detects an installed cable and selects it on
+first run.
+
+**Using the bundled driver** — from an elevated prompt:
+
+```bash
+install-driver.cmd
+```
+
+This needs Secure Boot off and test signing on; the script offers to enable test
+signing and tells you when a reboot is required. Set **Output** to
+`RadioVoice Output` and select `RadioVoice Microphone` in the receiving
+application.
+
+Because a virtual cable is silent by definition, turn on **Monitor** in the top
+bar and point it at your headphones to hear yourself.
+
+[QUICKSTART.md](QUICKSTART.md) covers the whole path in detail, including driver
+signing. *(Currently in Polish.)*
+
+---
+
+## Signal flow
+
+```
+microphone ──> WASAPI / ASIO / DirectSound capture
+                     │
+                     ▼
+              lock-free ring buffer
+                     │
+                     ▼
+            clock-drift resampler
+                     │
+    gain ──> [ suppressor | gate | EQ | compressor | VST3 … ] ──> gain ──> limiter
+                     │
+        ┌────────────┴────────────┐
+        ▼                         ▼
+  virtual device            monitor device
+        │                    (headphones)
+        ▼
+  Discord / OBS / Teams / …
+```
+
+Capture and playback run on two independent clocks. Even at a nominal 48 kHz
+they differ by tens to thousands of parts per million, so a variable-ratio
+resampler driven by a PI controller holds the bridging buffer at a target fill.
+The correction in effect is shown as `drift` in the status bar.
+
+The whole DSP chain runs on the output device thread.
+
+---
+
+## Features
+
+**Noise Suppressor** — [RNNoise](https://github.com/xiph/rnnoise). Attenuates
+steady noise while you are speaking, which a gate cannot do. Mix control from 0
+to 100%; costs 10 ms of latency while in the chain. 48 kHz only.
+
+**Noise Gate** — threshold, range, hysteresis, attack/hold/release, lookahead
+and a high-pass filter in the detector path.
+
+**Equalizer** — ten ISO bands (shelves at the extremes), 24 dB/oct high- and
+low-pass filters, response curve drawn over the live input spectrum. Drag the
+band handles; the wheel over a handle sets Q.
+
+**Compressor** — soft knee, RMS or peak detection, lookahead, detector-path
+high-pass, auto makeup. Ballistics computed in the dB domain.
+
+**Output Limiter** — brickwall with lookahead.
+
+**Processing Chain** — the built-in modules and any VST3 plugins in one
+drag-to-reorder list. Each has its own enable switch; plugins open their native
+editor window or a parameter list.
+
+**Monitor** — a second output carrying the same processed signal, with its own
+level and mute. Starts and stops without restarting the engine.
+
+**Downmix** — input fold-down (stereo, left, right, sum) under the microphone
+selector, and a sum-to-mono switch under the output. The first is for a single
+microphone plugged into one side of a stereo input.
+
+Configuration, the chain and plugin state are saved to
+`%APPDATA%\RadioVoice\config.json`. The log is `%APPDATA%\RadioVoice\radiovoice.log`.
+
+### Plugin scanning
+
+Standard VST3 folders are scanned in the background at start-up and cached in
+`plugins.json`. Extra folders can be added under **Scan folders** in the *Add
+plugin* window.
+
+A plugin can take the process down as it loads, so the scanner writes the bundle
+it is about to touch into a sentinel file and clears it afterwards. If that file
+survives a restart, the bundle is blacklisted instead of being tried again. The
+blacklist can be cleared from the same window.
+
+---
+
+## Building
+
+Requirements:
+
+- Windows 10 1903+ or Windows 11 (x64)
+- CMake ≥ 3.24 and Ninja
+- MinGW-w64 GCC ≥ 13, or MSVC 2019+
+- A Direct3D 11 driver (feature level 10.0; WARP as a fallback)
+
+```bash
+build.cmd
+```
+
+Produces `build\bin\RadioVoice.exe`. Variants: `build.cmd reldbg`, `debug`,
+`msvc`, `no-vst3`. Or through CMake directly:
 
 ```bash
 cmake --preset mingw
 cmake --build --preset mingw
 ```
 
-Warianty: `build.cmd reldbg` (Release + symbole), `debug`, `msvc`, `no-vst3`.
+Dear ImGui, nlohmann/json, the VST3 SDK and RNNoise are fetched at configure
+time, so the first `cmake -B` needs network access. RNNoise additionally
+downloads a 56 MB model archive, verified against a SHA-256 recorded in the
+pinned source. The weights are compiled in, which is most of the executable's
+size.
 
-### Ikona
+Options: `-DRV_ENABLE_VST3=OFF`, `-DRV_ENABLE_RNNOISE=OFF`, `-DRV_ENABLE_ASIO=OFF`.
 
-`res/RadioVoice.ico` jest wersjonowana i wchodzi do pliku wykonywalnego przez
-`res/app.rc`, więc zwykły build nic z nią nie robi. Rysuje ją
-`tools/make-icon.py` (wymaga Pillow) — każdy rozmiar od 16 do 256 px osobno,
-bo kreski czytelne przy 256 px przy 16 px zlewają się w plamę. Po zmianie
-grafiki trzeba uruchomić skrypt i zacommitować wynikowy `.ico`.
+ASIO builds out of the box — the host subset of the SDK is in
+`third_party/asiosdk`. `tools\fetch-asio-sdk.cmd` updates it to a newer release.
 
-### ASIO
-
-Działa od razu, bez dodatkowych kroków. Od wersji 2.3.4 SDK ASIO jest
-dwulicencyjne — Steinberg **albo** GPLv3 — więc dziewięcioplikowy podzbiór
-potrzebny hostowi leży w `third_party/asiosdk` na warunkach GPLv3, pod którym
-projekt i tak już jest. Szczegóły i co świadomie pominięto: [NOTICE.md](NOTICE.md).
-
-`tools\fetch-asio-sdk.cmd` służy tylko do aktualizacji SDK do nowszego wydania.
+The application icon is committed as `res/RadioVoice.ico` and compiled in
+through `res/app.rc`; a normal build does not regenerate it. `tools/make-icon.py`
+(needs Pillow) redraws it, sizes 16 to 256 px individually.
 
 ---
 
-## Wirtualne wyjście
+## Virtual audio driver
 
-Windows nie ma wbudowanego sposobu, by aplikacja udostępniła strumień audio
-innym aplikacjom jako mikrofon. Wymaga to sterownika. Są dwie drogi:
+[`driver/`](driver/) contains a kernel driver that creates a
+`RadioVoice Output` / `RadioVoice Microphone` endpoint pair and loops one into
+the other — a functional equivalent of VB-CABLE with no external dependency.
+48 kHz, 16- or 24-bit, stereo.
 
-### A. Gotowy wirtualny kabel (działa od razu)
-
-Zainstaluj [VB-CABLE](https://vb-audio.com/Cable/), a następnie:
-
-1. w RadioVoice ustaw **Output** na `CABLE Input (VB-Audio Virtual Cable)`
-2. w Discordzie / OBS / Teams wybierz mikrofon `CABLE Output (VB-Audio Virtual Cable)`
-
-Aplikacja wykrywa zainstalowane kable wirtualne sama i przy pierwszym
-uruchomieniu ustawia wyjście na `CABLE Input`, jeśli je znajdzie. Gdy żadnego
-nie ma, panel I/O tłumaczy dlaczego i linkuje do instalatora.
-
-### B. Własny sterownik (`driver/`)
-
-W katalogu [`driver/`](driver/) leży sterownik jądra, który tworzy parę
-endpointów `RadioVoice Output` / `RadioVoice Microphone` i wewnętrznie pętli
-jeden na drugi — funkcjonalny odpowiednik VB-CABLE, bez zewnętrznej zależności.
-
-Instalacja wymaga **wyłączonego Secure Boot i włączonego trybu testowego**
-podpisywania, albo komercyjnego certyfikatu EV. Szczegóły, kompletna procedura
-budowania i lokalnego podpisywania: [`driver/README.md`](driver/README.md).
+Installing it requires Secure Boot off and test signing on, or a commercial EV
+certificate. `install-driver.cmd` and `uninstall-driver.cmd` in the repository
+root handle build, signing and installation; the full procedure and the
+diagnostic tooling are in [`driver/README.md`](driver/README.md).
 
 ---
 
-## Interfejs
+## Status
 
-- **Audio I/O** — backend, urządzenia, tryb dzielony/wyłączny, częstotliwość,
-  rozmiar bloku, plus na żywo wynegocjowany format i rozmiar bufora
-- **Equalizer** — 10 pasm ISO (skrajne jako półki), filtry HP/LP 24 dB/okt,
-  krzywa odpowiedzi na tle widma wejścia; uchwyty pasm ciągnie się myszą,
-  kółko nad uchwytem zmienia Q
-- **Noise Gate** — próg, zakres, histereza, atak/hold/release, lookahead oraz
-  filtr HP w torze detektora
-- **Compressor** — miękkie kolano, detekcja RMS albo szczytowa, lookahead,
-  filtr HP w torze detektora, auto makeup; ballistyka liczona w dziedzinie dB
-- **Output Limiter** — brickwall z lookahead, chroni wirtualny kabel przed
-  przesterowaniem
-- **Processing Chain** — bramka, EQ, kompresor i wtyczki VST3 w jednej,
-  przestawialnej liście; każdy element z osobnym włącznikiem, wtyczki z własnym
-  oknem edytora albo listą parametrów
+Verified on real hardware: WASAPI capture and playback, the DSP chain, VST3
+hosting including native editor windows, the monitor output, and the bundled
+driver end to end — built, signed, installed and passing audio.
 
-Downmix: pod wyborem mikrofonu jest tryb składania kanałów wejścia (stereo,
-lewy, prawy, suma), a pod wyjściem przełącznik sumowania do mono. Pierwsze
-przydaje się, gdy jeden mikrofon siedzi w stereofonicznym wejściu interfejsu —
-branie obu kanałów daje wtedy głos po jednej stronie i ciszę po drugiej.
+Known gaps:
 
-Konfiguracja, łańcuch i stan wtyczek zapisują się w
-`%APPDATA%\RadioVoice\config.json`. Log: `%APPDATA%\RadioVoice\radiovoice.log`.
-
-### Skanowanie wtyczek
-
-Standardowe katalogi VST3 skanowane są w tle przy starcie, wyniki cache'owane
-w `plugins.json`. Wtyczka potrafi wywrócić proces przy ładowaniu, więc przed
-każdą próbą skaner zapisuje jej ścieżkę do pliku wartowniczego i kasuje go po
-sukcesie. Jeśli plik przetrwa restart, ta wtyczka jest wpisywana na czarną
-listę zamiast być ładowana ponownie — jedna wroga wtyczka nie zablokuje
-uruchomienia aplikacji. Czarną listę można wyczyścić z okna „Add plugin”.
+- **DirectSound capture** under-delivers on some interfaces. The log reports how
+  its polls divided up when a stream stops. WASAPI is the recommended backend.
+- **ASIO** compiles and enumerates drivers; an ASIO stream has not been opened
+  on this machine.
+- **WASAPI exclusive mode** is implemented but untested.
+- **MSVC** builds of the application are configured but only MinGW has been run.
+- Moving the window between displays of different DPI is handled but has not
+  been exercised on a multi-monitor setup.
 
 ---
 
-## Co zostało zweryfikowane
+## Licence
 
-Sprawdzone na tej maszynie, na realnym sprzęcie i realnych wtyczkach:
-
-- kompilacja i linkowanie pod MinGW-w64 GCC 16.1 (MSVC nie był dostępny)
-- otwarcie strumieni WASAPI shared w obie strony, praca silnika, mierniki
-- skan 20 pakietów VST3 → 16 użytecznych wtyczek (Focusrite, Softube,
-  Native Instruments, Klevgrand, IK Multimedia)
-- załadowanie wtyczek do łańcucha, przetwarzanie dźwięku, odtworzenie
-  łańcucha z zapisanej konfiguracji
-- hostowanie natywnego okna edytora VST3 (`IPlugView`) — Softube Saturation
-  Knob renderuje się z działającymi miernikami
-- automatyczne wykrycie VB-CABLE i ustawienie go jako wyjście
-
-Sterownik (`driver/`) kompiluje się i linkuje czysto pod MSVC 19.44 + WDK
-10.0.26100, a cały łańcuch podpisywania — generowanie katalogu przez Inf2Cat i
-podpis `.sys` oraz `.cat` — został przetestowany od początku do końca.
-
-Backend **ASIO** kompiluje się i linkuje (SDK 2.3.3, MinGW), a wykrywanie SDK
-przez CMake i skrypt pobierający są sprawdzone od zera.
-
-Czego **nie** udało się zweryfikować w tym środowisku:
-
-- **ASIO w działaniu** — kod się kompiluje i sterowniki są wyliczane, ale
-  strumień przez ASIO nigdy nie był otwarty
-- **WASAPI exclusive** i **DirectSound** — ścieżki napisane, ale nie uruchomione
-- **sterownik w działaniu** — załadowanie wymaga trybu testowego i restartu
-  maszyny; nie robiłem tego. Szczegóły i lista miejsc do sprawdzenia w razie
-  problemów: [`driver/README.md`](driver/README.md)
-- interakcja myszą z GUI — automatyzacja nie potrafiła dostarczyć kliknięć do
-  okna (przechwytywał je Explorer), więc klikanie sprawdź proszę sam
-- build pod **MSVC** samej aplikacji (CMake go obsługuje, ale uruchamiałem
-  tylko MinGW)
-
----
-
-## Licencja
-
-**GPL-3.0-or-later** — konsekwencja linkowania VST3 SDK bez umowy ze Steinbergiem.
-Szczegóły i rozbicie na zależności: [NOTICE.md](NOTICE.md).
-
-Build z `-DRV_ENABLE_VST3=OFF` nie zawiera żadnej zależności copyleft.
+**GPL-3.0-or-later**. Per-dependency breakdown in [NOTICE.md](NOTICE.md).
