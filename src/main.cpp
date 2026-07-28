@@ -20,6 +20,7 @@
 #include "core/Paths.h"
 #include "core/Strings.h"
 #include "gui/Theme.h"
+#include "resource.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
                                                              WPARAM wParam, LPARAM lParam);
@@ -128,6 +129,17 @@ void applyDarkTitleBar(HWND hwnd)
         ::DwmSetWindowAttribute(hwnd, 19, &enabled, sizeof(enabled));
 }
 
+/// Loads the application icon at the system metric named by `widthMetric` and
+/// `heightMetric`. Shared images, so they must not be destroyed.
+HICON loadAppIcon(HINSTANCE instance, int widthMetric, int heightMetric)
+{
+    return static_cast<HICON>(::LoadImageW(instance, MAKEINTRESOURCEW(IDI_APPICON),
+                                           IMAGE_ICON,
+                                           ::GetSystemMetrics(widthMetric),
+                                           ::GetSystemMetrics(heightMetric),
+                                           LR_SHARED));
+}
+
 LRESULT WINAPI windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, message, wParam, lParam))
@@ -204,6 +216,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     wc.lpfnWndProc   = windowProc;
     wc.hInstance     = instance;
     wc.hCursor       = ::LoadCursorW(nullptr, IDC_ARROW);
+    // Asking for the exact metrics rather than passing LR_DEFAULTSIZE lets the
+    // loader pick the matching image out of the icon group instead of scaling
+    // the 32x32 one down for the title bar.
+    wc.hIcon         = loadAppIcon(instance, SM_CXICON, SM_CYICON);
+    wc.hIconSm       = loadAppIcon(instance, SM_CXSMICON, SM_CYSMICON);
     wc.hbrBackground = ::CreateSolidBrush(RGB(0x12, 0x14, 0x18));
     wc.lpszClassName = kWindowClass;
     ::RegisterClassExW(&wc);
