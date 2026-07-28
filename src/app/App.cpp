@@ -920,8 +920,17 @@ void App::renderTopBar()
         // Constrained because the update section inside can carry a paragraph of
         // release notes, and an auto-sized popup holding one is either a column
         // of single words or the width of the screen.
+        //
+        // The height matters for a different reason: a popup that fits itself to
+        // its contents is not clamped to the display, and this menu has grown
+        // long enough that on a small screen at 200% scale its last section -
+        // which is the one holding a switch someone came here to find - would
+        // simply be off the bottom. Bounded, it scrolls instead.
+        const float maxHeight =
+            std::max(px(240.0f), ImGui::GetMainViewport()->WorkSize.y - px(90.0f));
+
         ImGui::SetNextWindowSizeConstraints(ImVec2(px(330.0f), 0.0f),
-                                            ImVec2(px(420.0f), FLT_MAX));
+                                            ImVec2(px(420.0f), maxHeight));
         if (ImGui::BeginPopup("##options")) {
             renderOptionsMenu();
             ImGui::EndPopup();
@@ -2439,8 +2448,11 @@ void App::renderUpdateSection()
         ImGui::EndChild();
     };
 
+    // "UPDATES" rather than "VERSION": the heading is what someone scans for,
+    // and nobody opens this menu looking for a version number - they open it
+    // looking for the switch that governs the checking.
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
-    ImGui::TextUnformatted("VERSION");
+    ImGui::TextUnformatted("UPDATES");
     ImGui::PopStyleColor();
     ImGui::Separator();
 

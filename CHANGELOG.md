@@ -9,6 +9,20 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.3.2] — 2026-07-28
+
+### Fixed
+
+- **The switch that turns update checking off was hard to find.** It sits in the
+  cog menu, but under a heading that said *VERSION* — which is not the word
+  anyone scans for when they are looking for it. The section is called *UPDATES*
+  now, and the version number is a line inside it rather than the name of it.
+- **The options menu could run off the bottom of the screen.** It has grown a log
+  line, four notification-area settings, a paragraph and an update section, and a
+  popup sizes itself to its contents without being clamped to the display — so on
+  a small screen, or a high display scale, the last section was not cut off so
+  much as absent. It scrolls now.
+
 ## [0.3.1] — 2026-07-28
 
 ### Fixed
