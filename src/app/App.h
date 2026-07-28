@@ -144,6 +144,16 @@ private:
     /// Node whose parameter list is open in the side panel, or null.
     host::Vst3Plugin* inspectedPlugin_ = nullptr;
 
+    /// Chain entry being dragged, by node id, or zero when nothing is.
+    ///
+    /// Tracked here rather than through ImGui's active-item state because the
+    /// list reorders underneath the pointer while the drag is in progress, and
+    /// the grab has to survive that.
+    u64 dragNodeId_ = 0;
+    /// Distance from the top of the grabbed row to where it was grabbed, so the
+    /// row keeps its position under the pointer instead of jumping.
+    float dragGrabOffsetY_ = 0.0f;
+
     char pluginFilter_[128] = {};
 
     /// Set when the engine last failed to start, shown until the next attempt.

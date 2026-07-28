@@ -1787,12 +1787,33 @@ void App::renderChainPanel()
     ImGui::PopStyleColor();
     ImGui::Spacing();
 
-    const float listHeight = inspectedPlugin_ ? ImGui::GetContentRegionAvail().y * 0.5f : 0.0f;
+    const ImGuiStyle& listStyle = ImGui::GetStyle();
+
+    // Height derived from what a row holds rather than written down. Two lines
+    // of widgets plus the child's own padding is what it is; a hard-coded 62
+    // was a few pixels short at this font size, and the shortfall showed up as
+    // a scrollbar on every entry that could travel almost nowhere.
+    const float rowHeight = ImGui::GetFrameHeight() * 2.0f + listStyle.ItemSpacing.y +
+                            listStyle.WindowPadding.y * 2.0f;
+    const float rowPitch = rowHeight + listStyle.ItemSpacing.y;
+
+    // Tall enough for the entries, never taller. Sizing it to the remaining
+    // space put a scrollbar beside a list that already fitted.
+    const float contentHeight = rowPitch * static_cast<float>(chainNodes_.size());
+    const float available     = ImGui::GetContentRegionAvail().y;
+    const float listHeight    = inspectedPlugin_
+                                    ? std::min(contentHeight, available * 0.5f)
+                                    : std::min(contentHeight, available);
 
     ImGui::BeginChild("##chainList", ImVec2(0, listHeight), ImGuiChildFlags_None);
 
     size_t moveFrom = SIZE_MAX, moveTo = SIZE_MAX;
     size_t removeIndex = SIZE_MAX;
+
+    const float listTopY = ImGui::GetCursorScreenPos().y;
+    const bool  dragging = dragNodeId_ != 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    if (dragNodeId_ != 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        dragNodeId_ = 0;
 
     for (size_t i = 0; i < chainNodes_.size(); ++i) {
         auto& node = chainNodes_[i];
@@ -1800,39 +1821,53 @@ void App::renderChainPanel()
 
         const bool bypassed = node->isBypassed();
         const bool isPlugin = node->kind() == dsp::NodeKind::Vst3Plugin;
+        const bool isDragged = dragging && node->id() == dragNodeId_;
+
+        // The grabbed row leaves the grid and follows the pointer. The offset
+        // is bounded to roughly one row because the list reorders as soon as
+        // the pointer passes the halfway mark, so the row is never far from the
+        // slot it belongs in - which is what keeps it from being drawn over the
+        // entries submitted after it.
+        const float slotTop = ImGui::GetCursorPosY();
+        if (isDragged) {
+            // Expressed as a displacement from where the row would sit, rather
+            // than converting a screen position into window coordinates. The
+            // two spaces differ by padding and scroll, and getting that
+            // conversion subtly wrong is a bug that only appears once the list
+            // is long enough to scroll.
+            const float wantedScreenY  = ImGui::GetIO().MousePos.y - dragGrabOffsetY_;
+            const float naturalScreenY = listTopY + static_cast<float>(i) * rowPitch;
+            const float displacement =
+                std::clamp(wantedScreenY - naturalScreenY, -rowPitch, rowPitch);
+
+            ImGui::SetCursorPosY(slotTop + displacement);
+        }
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::toVec4(theme::kPanelRaised));
-        ImGui::BeginChild("##item", ImVec2(0, kChainRowHeight), ImGuiChildFlags_Borders);
+        if (isDragged)
+            ImGui::PushStyleColor(ImGuiCol_Border, theme::toVec4(theme::kAccent));
+        ImGui::BeginChild("##item", ImVec2(0, rowHeight), ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         // The name is a Selectable purely so it can be grabbed. It was plain
         // text, and plain text is not an item ImGui tracks - IsItemActive is
-        // never true for it, so the reordering below could not fire at all and
-        // the hint above the list was describing something that did not exist.
+        // never true for it, so reordering could not fire at all and the hint
+        // above the list was describing something that did not exist.
         ImGui::PushStyleColor(ImGuiCol_Text,
                               theme::toVec4(bypassed ? theme::kTextFaint : theme::kText));
-        ImGui::Selectable(node->name().c_str(), false, ImGuiSelectableFlags_AllowOverlap);
+        ImGui::Selectable(node->name().c_str(), isDragged,
+                          ImGuiSelectableFlags_AllowOverlap);
         ImGui::PopStyleColor();
 
-        if (ImGui::IsItemHovered() && !ImGui::IsItemActive())
+        if (ImGui::IsItemHovered() && !ImGui::IsItemActive() && !dragging)
             ImGui::SetTooltip("Drag up or down to move this in the chain");
 
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            // Measured against the row pitch rather than a constant: a swap
-            // should happen when the pointer has travelled roughly as far as
-            // the neighbour it is trading places with, otherwise one gesture
-            // walks the module several positions at once.
-            const float pitch = kChainRowHeight + ImGui::GetStyle().ItemSpacing.y;
-            const float delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).y;
-
-            if (delta < -pitch * 0.6f && i > 0) {
-                moveFrom = i;
-                moveTo   = i - 1;
-                ImGui::ResetMouseDragDelta();
-            } else if (delta > pitch * 0.6f && i + 1 < chainNodes_.size()) {
-                moveFrom = i;
-                moveTo   = i + 1;
-                ImGui::ResetMouseDragDelta();
-            }
+        // Grabbing records where within the row the pointer landed, so the row
+        // stays put under it rather than snapping its top to the cursor.
+        if (dragNodeId_ == 0 && ImGui::IsItemActive() &&
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            dragNodeId_      = node->id();
+            dragGrabOffsetY_ = ImGui::GetIO().MousePos.y - ImGui::GetWindowPos().y;
         }
 
         // The trailing controls are right-aligned against a width measured from
@@ -1854,9 +1889,8 @@ void App::renderChainPanel()
         if (isPlugin) {
             trailing += style.ItemSpacing.x + smallButtonWidth("UI");
             trailing += style.ItemSpacing.x + smallButtonWidth("Params");
-        }
-        if (isPlugin)
             trailing += style.ItemSpacing.x + smallButtonWidth("X");
+        }
 
         // The right edge in window-local coordinates, which is what
         // SetCursorPosX speaks. Taken while the cursor is still at the start of
@@ -1920,7 +1954,30 @@ void App::renderChainPanel()
         }
 
         ImGui::EndChild();
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(isDragged ? 2 : 1);
+
+        // The offset row must not drag the ones after it along, so the cursor
+        // returns to the grid regardless of where this entry was drawn.
+        ImGui::SetCursorPosY(slotTop + rowPitch);
+
+        // Where the pointer is decides the position, not how far it has
+        // travelled. A threshold on the distance is what made this jump: it
+        // fired once, reset, and needed another full push to fire again, so the
+        // row lagged the cursor and then caught up in a leap.
+        if (isDragged) {
+            const float centreY = ImGui::GetIO().MousePos.y - dragGrabOffsetY_ +
+                                  rowHeight * 0.5f;
+            const float slot    = (centreY - listTopY) / rowPitch;
+
+            auto target = static_cast<size_t>(std::clamp(
+                static_cast<int>(std::floor(slot)), 0,
+                static_cast<int>(chainNodes_.size()) - 1));
+
+            if (target != i) {
+                moveFrom = i;
+                moveTo   = target;
+            }
+        }
 
         ImGui::PopID();
     }
