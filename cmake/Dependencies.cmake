@@ -178,3 +178,108 @@ if(RV_ENABLE_ASIO)
         add_library(rv::asio ALIAS rv_asio)
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# RNNoise - BSD-3-Clause (Xiph.Org). Verified against the COPYING file in the
+# pinned tree, not from memory.
+#
+# The weights are not in the repository: upstream keeps them in a tarball named
+# after its own SHA-256, which `model_version` holds. Reading that file and
+# feeding it to EXPECTED_HASH means the download is verified against a value
+# that travels with the pinned source, so the two can never drift apart.
+# ---------------------------------------------------------------------------
+if(RV_ENABLE_RNNOISE)
+    FetchContent_Declare(rnnoise
+        GIT_REPOSITORY https://github.com/xiph/rnnoise.git
+        GIT_TAG        70f1d256acd4b34a572f999a05c87bf00b67730d
+        SOURCE_SUBDIR  cmake-is-not-used)
+    FetchContent_MakeAvailable(rnnoise)
+
+    file(READ ${rnnoise_SOURCE_DIR}/model_version RV_RNNOISE_MODEL_HASH)
+    string(STRIP "${RV_RNNOISE_MODEL_HASH}" RV_RNNOISE_MODEL_HASH)
+
+    if(NOT EXISTS ${rnnoise_SOURCE_DIR}/src/rnnoise_data.c)
+        set(RV_RNNOISE_MODEL_ARCHIVE
+            ${CMAKE_BINARY_DIR}/rnnoise_data-${RV_RNNOISE_MODEL_HASH}.tar.gz)
+
+        message(STATUS "Downloading the RNNoise model (about 56 MB)")
+        file(DOWNLOAD
+            https://media.xiph.org/rnnoise/models/rnnoise_data-${RV_RNNOISE_MODEL_HASH}.tar.gz
+            ${RV_RNNOISE_MODEL_ARCHIVE}
+            EXPECTED_HASH SHA256=${RV_RNNOISE_MODEL_HASH}
+            SHOW_PROGRESS
+            STATUS RV_RNNOISE_DOWNLOAD_STATUS)
+
+        list(GET RV_RNNOISE_DOWNLOAD_STATUS 0 RV_RNNOISE_DOWNLOAD_CODE)
+        if(NOT RV_RNNOISE_DOWNLOAD_CODE EQUAL 0)
+            list(GET RV_RNNOISE_DOWNLOAD_STATUS 1 RV_RNNOISE_DOWNLOAD_MESSAGE)
+            message(FATAL_ERROR
+                "Could not download the RNNoise model: ${RV_RNNOISE_DOWNLOAD_MESSAGE}. "
+                "Configure with -DRV_ENABLE_RNNOISE=OFF to build without it.")
+        endif()
+
+        # Only the two generated sources are wanted; the archive also carries
+        # the PyTorch checkpoints they were produced from, which are of no use
+        # at build time and account for nearly all of its size.
+        file(ARCHIVE_EXTRACT INPUT ${RV_RNNOISE_MODEL_ARCHIVE}
+             DESTINATION ${rnnoise_SOURCE_DIR}
+             PATTERNS src/rnnoise_data.c src/rnnoise_data.h)
+    endif()
+
+    add_library(rv_rnnoise STATIC
+        ${rnnoise_SOURCE_DIR}/src/denoise.c
+        ${rnnoise_SOURCE_DIR}/src/rnn.c
+        ${rnnoise_SOURCE_DIR}/src/pitch.c
+        ${rnnoise_SOURCE_DIR}/src/kiss_fft.c
+        ${rnnoise_SOURCE_DIR}/src/celt_lpc.c
+        ${rnnoise_SOURCE_DIR}/src/nnet.c
+        ${rnnoise_SOURCE_DIR}/src/nnet_default.c
+        ${rnnoise_SOURCE_DIR}/src/parse_lpcnet_weights.c
+        ${rnnoise_SOURCE_DIR}/src/rnnoise_data.c
+        ${rnnoise_SOURCE_DIR}/src/rnnoise_tables.c)
+
+    target_include_directories(rv_rnnoise SYSTEM PUBLIC
+        ${rnnoise_SOURCE_DIR}/include
+        ${rnnoise_SOURCE_DIR}/src)
+
+    # Runtime dispatch, not a compile-time -march. The network is three GRUs of
+    # 384 units evaluated every 10 ms, which is affordable on AVX2 and much less
+    # so on the plain SSE2 fallback - but a binary built for AVX2 outright would
+    # simply not start on a machine without it.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|AMD64|amd64|i.86" OR WIN32)
+        target_sources(rv_rnnoise PRIVATE
+            ${rnnoise_SOURCE_DIR}/src/x86/x86_dnn_map.c
+            ${rnnoise_SOURCE_DIR}/src/x86/x86cpu.c
+            ${rnnoise_SOURCE_DIR}/src/x86/nnet_sse4_1.c
+            ${rnnoise_SOURCE_DIR}/src/x86/nnet_avx2.c)
+
+        # CPU_INFO_BY_ASM is what upstream's own configure defines; the RTCD
+        # code refuses to compile without being told how to reach CPUID, and
+        # inline assembly is the only method it offers on GCC and Clang. MSVC
+        # has the __cpuid intrinsic instead.
+        target_compile_definitions(rv_rnnoise PRIVATE RNN_ENABLE_X86_RTCD)
+        if(MSVC)
+            target_compile_definitions(rv_rnnoise PRIVATE CPU_INFO_BY_C)
+        else()
+            target_compile_definitions(rv_rnnoise PRIVATE CPU_INFO_BY_ASM)
+        endif()
+
+        if(MSVC)
+            set_source_files_properties(${rnnoise_SOURCE_DIR}/src/x86/nnet_avx2.c
+                PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+        else()
+            set_source_files_properties(${rnnoise_SOURCE_DIR}/src/x86/nnet_sse4_1.c
+                PROPERTIES COMPILE_OPTIONS "-msse4.1")
+            set_source_files_properties(${rnnoise_SOURCE_DIR}/src/x86/nnet_avx2.c
+                PROPERTIES COMPILE_OPTIONS "-mavx;-mfma;-mavx2")
+        endif()
+    endif()
+
+    if(MSVC)
+        target_compile_options(rv_rnnoise PRIVATE /W0)
+    else()
+        target_compile_options(rv_rnnoise PRIVATE -w)
+    endif()
+
+    add_library(rv::rnnoise ALIAS rv_rnnoise)
+endif()

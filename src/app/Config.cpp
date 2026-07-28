@@ -94,6 +94,9 @@ Config Config::load()
         v.monitorGainDb = p.value("monitorGainDb", v.monitorGainDb);
         v.monitorMute   = p.value("monitorMute", v.monitorMute);
 
+        v.denoiseEnabled = p.value("denoiseEnabled", v.denoiseEnabled);
+        v.denoiseAmount  = p.value("denoiseAmount", v.denoiseAmount);
+
         v.hpfEnabled = p.value("hpfEnabled", v.hpfEnabled);
         v.hpfHz      = p.value("hpfHz", v.hpfHz);
         v.lpfEnabled = p.value("lpfEnabled", v.lpfEnabled);
@@ -181,6 +184,8 @@ void Config::save() const
     p["bypassAll"]    = params.bypassAll;
     p["monitorGainDb"] = params.monitorGainDb;
     p["monitorMute"]   = params.monitorMute;
+    p["denoiseEnabled"] = params.denoiseEnabled;
+    p["denoiseAmount"]  = params.denoiseAmount;
     p["hpfEnabled"]   = params.hpfEnabled;
     p["hpfHz"]        = params.hpfHz;
     p["lpfEnabled"]   = params.lpfEnabled;
@@ -243,6 +248,8 @@ void Config::applyTo(Params& target) const
     target.monitorGainDb.store(params.monitorGainDb);
     target.monitorMute.store(params.monitorMute);
 
+    target.denoiseEnabled.store(params.denoiseEnabled);
+    target.denoiseAmount.store(params.denoiseAmount);
     target.hpfEnabled.store(params.hpfEnabled);
     target.hpfHz.store(params.hpfHz);
     target.lpfEnabled.store(params.lpfEnabled);
@@ -295,6 +302,8 @@ void Config::captureFrom(const Params& source)
     params.monitorGainDb = source.monitorGainDb.load();
     params.monitorMute   = source.monitorMute.load();
 
+    params.denoiseEnabled = source.denoiseEnabled.load();
+    params.denoiseAmount  = source.denoiseAmount.load();
     params.hpfEnabled = source.hpfEnabled.load();
     params.hpfHz      = source.hpfHz.load();
     params.lpfEnabled = source.lpfEnabled.load();

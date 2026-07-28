@@ -16,6 +16,7 @@
 #include "dsp/Compressor.h"
 #include "dsp/GraphicEq.h"
 #include "dsp/NoiseGate.h"
+#include "dsp/NoiseSuppressor.h"
 #include "dsp/Smoothing.h"
 #include "gui/EqEditor.h"
 #include "gui/Widgets.h"
@@ -363,8 +364,12 @@ void App::buildChainFromConfig()
     // A configuration with no chain at all is a first run; give it the default
     // voice path rather than a bypassed signal.
     if (config_.chain.empty()) {
-        // Gate first so the compressor is not asked to ride the noise floor,
-        // EQ before the compressor so it reacts to the shaped signal.
+        // Suppression first: everything after it - the gate's threshold, the
+        // compressor's envelope - is deciding on a signal, and it should be the
+        // cleaned one. Then the gate, so the compressor is not asked to ride
+        // the noise floor, and the EQ before the compressor so it reacts to the
+        // shaped signal.
+        config_.chain.push_back({"denoise", false, "", "", "", ""});
         config_.chain.push_back({"gate", false, "", "", "", ""});
         config_.chain.push_back({"equalizer", false, "", "", "", ""});
         config_.chain.push_back({"compressor", false, "", "", "", ""});
@@ -373,7 +378,9 @@ void App::buildChainFromConfig()
     for (const auto& entry : config_.chain) {
         dsp::NodePtr node;
 
-        if (entry.kind == "gate") {
+        if (entry.kind == "denoise") {
+            node = std::make_shared<dsp::NoiseSuppressor>(params_, meters_);
+        } else if (entry.kind == "gate") {
             node = std::make_shared<dsp::NoiseGate>(params_, meters_);
         } else if (entry.kind == "equalizer") {
             node = std::make_shared<dsp::GraphicEq>(params_);
@@ -426,6 +433,8 @@ void App::buildChainFromConfig()
             chainNodes_.push_back(make());
     };
 
+    ensure(dsp::NodeKind::NoiseSuppressor,
+           [this] { return std::make_shared<dsp::NoiseSuppressor>(params_, meters_); });
     ensure(dsp::NodeKind::Gate,
            [this] { return std::make_shared<dsp::NoiseGate>(params_, meters_); });
     ensure(dsp::NodeKind::Equalizer,
@@ -495,6 +504,9 @@ void App::captureChainToConfig()
         entry.bypassed = node->isBypassed();
 
         switch (node->kind()) {
+            case dsp::NodeKind::NoiseSuppressor:
+                entry.kind = "denoise";
+                break;
             case dsp::NodeKind::Gate:
                 entry.kind = "gate";
                 break;
@@ -1379,6 +1391,18 @@ void App::renderProcessingPanel()
     // further rows on a narrow window, so this is a floor rather than an exact
     // fit - the panels scroll if a very narrow window pushes them past it.
     const float dynamicsHeight = 305.0f;
+
+    // One row: a switch, a slider and a speech indicator. Small on purpose -
+    // the suppressor has one control worth having, and giving it a panel the
+    // size of the compressor's would imply otherwise.
+    const float denoiseHeight = ImGui::GetFrameHeight() * 2.0f +
+                                ImGui::GetStyle().ItemSpacing.y +
+                                ImGui::GetStyle().WindowPadding.y * 2.0f;
+
+    ImGui::BeginChild("##denoise", ImVec2(0, denoiseHeight), ImGuiChildFlags_Borders);
+    renderDenoisePanel();
+    ImGui::EndChild();
+
     const float eqHeight = ImGui::GetContentRegionAvail().y - dynamicsHeight -
                            ImGui::GetStyle().ItemSpacing.y;
 
@@ -1505,6 +1529,78 @@ void App::renderProcessingPanel()
         }
     }
     ImGui::EndChild();
+}
+
+void App::renderDenoisePanel()
+{
+    ImGui::PushFont(fonts_.medium, 0.0f);
+    ImGui::TextUnformatted("Noise Suppressor");
+    ImGui::PopFont();
+
+    // Whether the model is actually running is not something to leave the user
+    // to infer from the sound. A build without it, or a stream at the wrong
+    // rate, says so here rather than offering a switch that does nothing.
+    const dsp::NoiseSuppressor* module = nullptr;
+    for (const auto& node : chainNodes_) {
+        if (node->kind() == dsp::NodeKind::NoiseSuppressor) {
+            module = static_cast<const dsp::NoiseSuppressor*>(node.get());
+            break;
+        }
+    }
+
+    const bool unavailable = module && !module->isActive();
+
+    if (unavailable) {
+        ImGui::SameLine();
+        ImGui::PushFont(fonts_.small, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
+        ImGui::TextUnformatted("  unavailable");
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", module->inactiveReason().c_str());
+    } else {
+        // Speech probability straight from the model, which is the one number
+        // that says whether it is hearing what it is supposed to.
+        const float speech = meters_.speechProbability.load();
+        ImGui::SameLine();
+        ImGui::PushFont(fonts_.small, 0.0f);
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            theme::toVec4(speech > 0.5f ? theme::kSignal : theme::kTextFaint));
+        ImGui::Text("  speech %.0f%%", static_cast<double>(speech * 100.0f));
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+    }
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 34);
+
+    bool enabled = params_.denoiseEnabled.load();
+    if (unavailable)
+        ImGui::BeginDisabled();
+    if (toggleSwitch("denoiseEnable", &enabled)) {
+        params_.denoiseEnabled.store(enabled);
+        markDirty();
+    }
+
+    float amount = params_.denoiseAmount.load() * 100.0f;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##denoiseAmount", &amount, 0.0f, 100.0f, "%.0f%% suppression")) {
+        params_.denoiseAmount.store(amount * 0.01f);
+        markDirty();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "How much of the cleaned signal replaces the original.\n"
+            "Unlike the gate, this removes steady noise while you are talking -\n"
+            "but taking all of it can sound processed in a quiet room, so\n"
+            "leaving a little of the original in is the usual remedy.\n"
+            "Costs 10 ms of latency whenever this module is in the chain.");
+    }
+
+    if (unavailable)
+        ImGui::EndDisabled();
 }
 
 void App::renderGatePanel()

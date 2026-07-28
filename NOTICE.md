@@ -20,9 +20,31 @@ other dependencies below stand in the way.
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT | no | single header, downloaded at configure time |
 | [VST3 SDK](https://github.com/steinbergmedia/vst3sdk) | GPLv3 **or** proprietary Steinberg licence | **yes** (under GPLv3) | fetched at configure time, only when `RV_ENABLE_VST3=ON` |
 | [ASIO SDK](https://www.steinberg.net/developers/) (host subset) | GPLv3 **or** proprietary Steinberg licence; the `host/` helpers are BSD-3-Clause | **yes** (under GPLv3) | vendored in `third_party/asiosdk` |
+| [RNNoise](https://github.com/xiph/rnnoise) | BSD-3-Clause | no | fetched at configure time, with its model downloaded separately, only when `RV_ENABLE_RNNOISE=ON` |
 
 Only the ASIO SDK is vendored, and only a nine-file subset of it. Everything
 else is fetched by CMake at configure time.
+
+### RNNoise
+
+BSD-3-Clause, from the Xiph.Org Foundation, with copyrights held by Jean-Marc
+Valin, Amazon, Mozilla, Xiph.Org and Mark Borgerding. Non-copyleft: it imposes
+no licence on this project.
+
+The trained weights are not in the upstream repository. They live in a tarball
+whose file name *is* its SHA-256, recorded in the repository's `model_version`
+file. The build reads that file and passes the value to CMake as the expected
+hash, so the download is verified against a number that travels with the pinned
+source and the two cannot drift apart.
+
+That archive also contains the PyTorch checkpoints the weights were generated
+from, which account for nearly all of its 56 MB and are of no use at build
+time; only the two generated C files are extracted.
+
+Compiled in rather than loaded at runtime, which is what accounts for the
+difference between a 3 MB executable and a 17 MB one. The alternative - shipping
+the weights as a separate file - trades that for an installation that breaks
+when the file is missing, on a feature the user cannot then diagnose.
 
 ### VST3 SDK
 

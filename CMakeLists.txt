@@ -9,6 +9,7 @@ project(RadioVoice
 # Options
 # ---------------------------------------------------------------------------
 option(RV_ENABLE_VST3   "Build the VST3 plugin host"                    ON)
+option(RV_ENABLE_RNNOISE "Build the neural noise suppressor (RNNoise)"  ON)
 option(RV_FETCH_VST3    "Download the VST3 SDK sources automatically"   ON)
 
 set(RV_VST3_SDK_DIR "" CACHE PATH
@@ -98,6 +99,13 @@ if(TARGET rv::asio)
     target_compile_definitions(RadioVoice PRIVATE RV_HAS_ASIO=1)
 else()
     target_compile_definitions(RadioVoice PRIVATE RV_HAS_ASIO=0)
+endif()
+
+if(TARGET rv::rnnoise)
+    target_link_libraries(RadioVoice PRIVATE rv::rnnoise)
+    target_compile_definitions(RadioVoice PRIVATE RV_HAS_RNNOISE=1)
+else()
+    target_compile_definitions(RadioVoice PRIVATE RV_HAS_RNNOISE=0)
 endif()
 
 # ---------------------------------------------------------------------------

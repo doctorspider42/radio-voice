@@ -8,6 +8,7 @@
 namespace rv::dsp {
 
 enum class NodeKind {
+    NoiseSuppressor,
     Gate,
     Equalizer,
     Compressor,

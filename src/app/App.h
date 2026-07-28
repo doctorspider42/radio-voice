@@ -48,6 +48,7 @@ private:
     void renderIoPanel();
     void renderVirtualCableHint();
     void renderProcessingPanel();
+    void renderDenoisePanel();
     void renderGatePanel();
     void renderCompressorPanel();
     void renderLimiterPanel();

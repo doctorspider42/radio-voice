@@ -30,6 +30,13 @@ struct Params {
     std::atomic<float> monitorGainDb{0.0f};
     std::atomic<bool>  monitorMute{false};
 
+    // -- neural noise suppression ------------------------------------------
+    std::atomic<bool>  denoiseEnabled{true};
+    /// How much of the denoised signal to use, 0..1. A mix rather than a
+    /// switch: full suppression can sound processed on a quiet room, and being
+    /// able to leave a little of the original in is the usual remedy.
+    std::atomic<float> denoiseAmount{0.9f};
+
     // -- high/low cut ------------------------------------------------------
     std::atomic<bool>  hpfEnabled{true};
     std::atomic<float> hpfHz{80.0f};       ///< 24 dB/oct Butterworth.
@@ -101,6 +108,8 @@ struct Params {
         bypassAll.store(false);
         monitorGainDb.store(0.0f);
         monitorMute.store(false);
+        denoiseEnabled.store(true);
+        denoiseAmount.store(0.9f);
         hpfEnabled.store(true);
         hpfHz.store(80.0f);
         lpfEnabled.store(false);
@@ -150,6 +159,8 @@ struct Meters {
     std::atomic<float> compressorReductionDb{0.0f};
     std::atomic<float> limiterReductionDb{0.0f};
     std::atomic<bool>  gateOpen{false};
+    /// Probability the current frame is speech, straight from the suppressor.
+    std::atomic<float> speechProbability{0.0f};
 
     /// Fraction of the available block period spent in the processing callback.
     std::atomic<float> cpuLoad{0.0f};
@@ -177,6 +188,7 @@ struct Meters {
         compressorReductionDb.store(0.0f);
         limiterReductionDb.store(0.0f);
         gateOpen.store(false);
+        speechProbability.store(0.0f);
         cpuLoad.store(0.0f);
         inputXruns.store(0);
         outputXruns.store(0);

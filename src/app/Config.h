@@ -66,6 +66,9 @@ struct Config {
         float monitorGainDb = 0.0f;
         bool  monitorMute   = false;
 
+        bool  denoiseEnabled = true;
+        float denoiseAmount  = 0.9f;
+
         bool  hpfEnabled = true;
         float hpfHz      = 80.0f;
         bool  lpfEnabled = false;
