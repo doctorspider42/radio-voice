@@ -9,6 +9,15 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.0] — 2026-07-28
+
+### Added
+
+- **The version is on screen now**, right beside the RadioVoice name at the top
+  of the window. Until now it lived in the cog menu, which is a fine place to
+  keep it and a poor place to find it — and the first thing anyone is asked when
+  they report a problem is which version they are running.
+
 ## [0.3.2] — 2026-07-28
 
 ### Fixed

@@ -699,13 +699,25 @@ void App::renderTopBar()
     const auto status = engine_->status();
     const bool running = engine_->isRunning();
 
+    const float titleY = ImGui::GetCursorPosY();
+
     ImGui::PushFont(fonts_.heading, 0.0f);
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kText));
     ImGui::TextUnformatted("RadioVoice");
+    const float titleHeight = ImGui::GetItemRectSize().y;
     ImGui::PopStyleColor();
     ImGui::PopFont();
 
+    // The build number rides on the title's baseline, small and faint: there
+    // for whoever is about to report something, quiet the rest of the time.
+    ImGui::SameLine(0, 6);
+    ImGui::SetCursorPosY(titleY + titleHeight - ImGui::GetTextLineHeight());
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+    ImGui::Text("v%s", RV_VERSION);
+    ImGui::PopStyleColor();
+
     ImGui::SameLine(0, 16);
+    ImGui::SetCursorPosY(titleY);
     if (running)
         statusPill("RUNNING", theme::kSignal);
     else if (!startupError_.empty())
