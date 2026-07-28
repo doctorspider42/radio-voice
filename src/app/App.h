@@ -100,8 +100,9 @@ private:
     void renderPluginParameters();
     void renderLogWindow();
 
-    /// Contents of the popup behind the "Tray" button.
-    void renderTrayMenu();
+    /// Contents of the popup behind the cog: the log, and where the window
+    /// goes when it is dismissed.
+    void renderOptionsMenu();
 
     // --- device helpers ---------------------------------------------------
     /// Picks a monitor device when none is chosen yet, preferring the system

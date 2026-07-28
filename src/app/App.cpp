@@ -755,14 +755,13 @@ void App::renderTopBar()
         const float monitorWidth = px(92.0f);
         const float buttonWidth  = px(84.0f);
         const float restartWidth = px(84.0f);
-        const float logWidth     = px(62.0f);
-        const float trayWidth    = px(62.0f);
+        const float gearWidth    = ImGui::GetFrameHeight();
         const float spacing      = ImGui::GetStyle().ItemSpacing.x;
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
-                             monitorWidth - buttonWidth - restartWidth - logWidth -
-                             trayWidth - spacing * 4);
+                             monitorWidth - buttonWidth - restartWidth - gearWidth -
+                             spacing * 3);
 
         // Monitoring is the one routing decision an operator changes mid-take -
         // headphones on to check a plugin, off again when it feeds back - so it
@@ -831,22 +830,27 @@ void App::renderTopBar()
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Stops and reopens both audio devices.");
 
+        // Everything that is set once and then forgotten - the log, and where
+        // the window goes when it is dismissed - lives behind the cog. The
+        // transport bar is read at a glance while talking, and two more words
+        // of chrome cost more than the click they save.
         ImGui::SameLine();
         const int problems = log::problemCount();
-        if (problems > 0)
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-        if (ImGui::Button("Log", ImVec2(logWidth, 0)))
-            showLog_ = !showLog_;
-        if (problems > 0)
-            ImGui::PopStyleColor();
-
-        ImGui::SameLine();
-        if (ImGui::Button("Tray", ImVec2(trayWidth, 0)))
-            ImGui::OpenPopup("##tray");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("What happens to the window, and to the engine behind it.");
-        if (ImGui::BeginPopup("##tray")) {
-            renderTrayMenu();
+        const bool open    = ImGui::IsPopupOpen("##options");
+        if (gearButton("##options-button", gearWidth,
+                       problems > 0 ? theme::kWarning : theme::kTextDim, open))
+            ImGui::OpenPopup("##options");
+        if (ImGui::IsItemHovered()) {
+            if (problems > 0) {
+                ImGui::SetTooltip("Options - the log, and where the window goes.\n"
+                                  "%d problem%s logged.",
+                                  problems, problems == 1 ? "" : "s");
+            } else {
+                ImGui::SetTooltip("Options - the log, and where the window goes.");
+            }
+        }
+        if (ImGui::BeginPopup("##options")) {
+            renderOptionsMenu();
             ImGui::EndPopup();
         }
     }
@@ -2240,8 +2244,29 @@ void App::renderPluginParameters()
 // Transport bar
 // ---------------------------------------------------------------------------
 
-void App::renderTrayMenu()
+void App::renderOptionsMenu()
 {
+    // The log first: it is the one item here anyone opens twice, and the only
+    // one that ever has something to say. The count is spelled out because the
+    // cog can only turn amber - it cannot say how amber.
+    const int problems = log::problemCount();
+    char logLabel[64];
+    if (problems > 0) {
+        std::snprintf(logLabel, sizeof(logLabel), "Log - %d problem%s", problems,
+                      problems == 1 ? "" : "s");
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
+    } else {
+        std::snprintf(logLabel, sizeof(logLabel), "Log");
+    }
+    if (ImGui::MenuItem(logLabel, nullptr, showLog_))
+        showLog_ = !showLog_;
+    if (problems > 0)
+        ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
     ImGui::TextUnformatted("NOTIFICATION AREA");
     ImGui::PopStyleColor();
