@@ -14,7 +14,9 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 
+#include <filesystem>
 #include <memory>
+#include <string>
 
 #include "app/App.h"
 #include "core/Autostart.h"
@@ -42,6 +44,7 @@ enum TrayCommand : UINT {
     kTrayToggleWindow = 1,
     kTrayMute,
     kTrayStartStop,
+    kTrayInstallUpdate,
     kTrayExit,
 };
 
@@ -256,6 +259,31 @@ void showTrayHint(HWND hwnd)
     g_trayHintShown = true;
 }
 
+/// Says that an update has finished downloading.
+///
+/// Shown only while the window is away, which is the case this exists for: the
+/// interface has a lit button for it, and a machine where RadioVoice has been
+/// hidden for a fortnight has nobody looking at that button.
+void showUpdateBalloon(HWND hwnd, const std::string& version)
+{
+    if (!g_trayIconAdded)
+        return;
+
+    NOTIFYICONDATAW data = trayIconBase(hwnd);
+    data.uFlags      = NIF_INFO;
+    data.dwInfoFlags = NIIF_INFO;
+
+    const std::wstring text =
+        L"Version " + rv::toWide(version) +
+        L" has been downloaded. Right-click this icon to install it.";
+
+    ::lstrcpynW(data.szInfoTitle, L"A RadioVoice update is ready",
+                ARRAYSIZE(data.szInfoTitle));
+    ::lstrcpynW(data.szInfo, text.c_str(), ARRAYSIZE(data.szInfo));
+
+    ::Shell_NotifyIconW(NIM_MODIFY, &data);
+}
+
 void hideToTray(HWND hwnd)
 {
     // Added before the window goes, not after: a window that disappears while
@@ -314,6 +342,13 @@ void showTrayMenu(HWND hwnd)
                       g_app->isEngineRunning() ? L"Stop processing" : L"Start processing");
     }
 
+    if (g_app && g_app->updateReady()) {
+        ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        const std::wstring item =
+            L"Install update " + rv::toWide(g_app->updateVersion()) + L"...";
+        ::AppendMenuW(menu, MF_STRING, kTrayInstallUpdate, item.c_str());
+    }
+
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kTrayExit, L"Exit");
 
@@ -349,6 +384,17 @@ void showTrayMenu(HWND hwnd)
             if (g_app) {
                 g_app->toggleEngine();
                 updateTrayTooltip(hwnd);
+            }
+            break;
+
+        case kTrayInstallUpdate:
+            // The same shutdown path as Exit. What differs is what the
+            // application left behind for it: an installer to start once this
+            // process is gone.
+            if (g_app) {
+                g_app->requestUpdateInstall();
+                g_exitRequested = true;
+                ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
             }
             break;
 
@@ -665,6 +711,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
                     removeTrayIcon(hwnd);  // never while it is the only way back
 
                 updateTrayTooltip(hwnd);
+
+                // Announced from here, and only with the window away: on screen
+                // the version button says the same thing without interrupting
+                // anyone. Left unclaimed while the window is up, so that hiding
+                // it later still produces the balloon.
+                if (!windowIsOnScreen(hwnd) && g_trayIconAdded) {
+                    std::string version;
+                    if (g_app->takeUpdateAnnouncement(version))
+                        showUpdateBalloon(hwnd, version);
+                }
             }
         }
 
@@ -729,6 +785,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
         g_swapChain->Present(1, 0);
     }
 
+    // Read before the application goes: Setup cannot run while this process
+    // holds the executable it is about to replace, so the launch happens at the
+    // very end - after the engine, the window and the notification icon.
+    const std::filesystem::path installer = app->pendingInstaller();
+
     app->shutdown();
     g_app = nullptr;
     app.reset();
@@ -742,14 +803,46 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
     ::DestroyWindow(hwnd);
     ::UnregisterClassW(kWindowClass, instance);
 
+    // Released before Setup starts, not after: the installer relaunches
+    // RadioVoice when it is done, and a lock this process was still holding
+    // would turn that relaunch into a second copy asking the first to show
+    // itself.
+    if (instanceLock)
+        ::CloseHandle(instanceLock);
+
+    if (!installer.empty()) {
+        // /SILENT rather than /VERYSILENT: the progress window is the only sign
+        // the user gets that the thing they clicked is under way. The rest keeps
+        // an unattended upgrade unattended - no message boxes, and no reboot
+        // decided on their behalf.
+        //
+        // `relaunch` is ours. Inno Setup passes parameters it does not recognise
+        // through to the script, where a [Run] entry starts RadioVoice again -
+        // the wizard's own "Launch RadioVoice" checkbox does not appear in a
+        // silent install, so without this the update would end with nothing
+        // running.
+        const std::wstring parameters = L"/SILENT /SUPPRESSMSGBOXES /NORESTART /relaunch=yes";
+
+        RV_INFO("starting the installer: %s", rv::toUtf8(installer.wstring()).c_str());
+
+        // Setup's manifest asks for elevation, so this is where the user sees a
+        // UAC prompt. There is no way round it: the application lives under
+        // Program Files because the driver half of the installer has to.
+        const HINSTANCE result =
+            ::ShellExecuteW(nullptr, L"open", installer.c_str(), parameters.c_str(),
+                            nullptr, SW_SHOWNORMAL);
+
+        if (reinterpret_cast<INT_PTR>(result) <= 32) {
+            RV_ERROR("the installer could not be started (%lld)",
+                     static_cast<long long>(reinterpret_cast<INT_PTR>(result)));
+        }
+    }
+
     RV_INFO("RadioVoice exiting");
     rv::log::shutdown();
 
     if (comOwned)
         ::CoUninitialize();
-
-    if (instanceLock)
-        ::CloseHandle(instanceLock);
 
     return 0;
 }

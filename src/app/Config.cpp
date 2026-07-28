@@ -88,6 +88,8 @@ Config Config::load()
     config.closeToTray    = root.value("closeToTray", config.closeToTray);
     config.startMinimized = root.value("startMinimized", config.startMinimized);
 
+    config.checkForUpdates = root.value("checkForUpdates", config.checkForUpdates);
+
     if (root.contains("params")) {
         const json& p = root["params"];
         auto& v = config.params;
@@ -186,6 +188,8 @@ void Config::save() const
     root["minimizeToTray"] = minimizeToTray;
     root["closeToTray"]    = closeToTray;
     root["startMinimized"] = startMinimized;
+
+    root["checkForUpdates"] = checkForUpdates;
 
     json p;
     p["inputGainDb"]  = params.inputGainDb;

@@ -240,6 +240,20 @@ Filename: "{app}\{#AppExe}"; Parameters: "--enable-autostart"; \
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchApp}"; \
     Flags: nowait postinstall skipifsilent
 
+; What the application's own updater passes when it hands over. A silent
+; install shows no finish page, so the checkbox above never appears - and an
+; update that ends with nothing running is not an update anyone wants.
+;
+; `runasoriginaluser` for the same reason as the autostart entry: Setup is
+; elevated, and RadioVoice is not something to leave running as an
+; administrator.
+;
+; No --minimized here. Whether the window shows is the application's own saved
+; setting, and an update the user asked for is a reasonable moment to see that
+; it landed.
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; \
+    Check: RelaunchRequested
+
 [UninstallRun]
 ; The counterpart, so that uninstalling does not leave an entry pointing at a
 ; deleted executable. Runs before the files go.
@@ -277,6 +291,14 @@ end;
 function DriverSelected: Boolean;
 begin
   Result := WizardIsComponentSelected('driver');
+end;
+
+// Whether this Setup was started by RadioVoice's own updater, which passes
+// /relaunch=yes. Inno Setup hands unknown parameters through untouched, so
+// {param:...} is the whole mechanism - there is nothing to declare.
+function RelaunchRequested: Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:relaunch|no}'), 'yes') = 0;
 end;
 
 // Reads the current boot configuration. bcdedit prints a "testsigning Yes" line

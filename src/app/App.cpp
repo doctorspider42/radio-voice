@@ -28,6 +28,8 @@ namespace {
 using namespace rv::gui;
 
 constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
+constexpr const char* kReleasesUrl =
+    "https://github.com/doctorspider42/radio-voice/releases";
 
 /// Draws text, shortened with an ellipsis when it will not fit.
 ///
@@ -161,6 +163,10 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
     // without the user having to ask; cached entries are not re-probed.
     scanner_.startScan({}, /*full=*/false);
 
+    // The worker exists either way, so that "Check now" works with automatic
+    // checking off. With it off it simply sits waiting and touches nothing.
+    updater_.start(config_.checkForUpdates);
+
     return true;
 }
 
@@ -207,6 +213,42 @@ void App::toggleEngine()
         stopEngine();
     else
         startEngine();
+}
+
+bool App::updateReady() const
+{
+    return updater_.status().state == Updater::State::Ready;
+}
+
+std::string App::updateVersion() const
+{
+    const auto status = updater_.status();
+    return status.state == Updater::State::Ready ? status.version : std::string{};
+}
+
+void App::requestUpdateInstall()
+{
+    const auto status = updater_.status();
+    if (status.state != Updater::State::Ready || status.installer.empty())
+        return;
+
+    pendingInstaller_ = status.installer;
+    wantsExit_        = true;
+
+    RV_INFO("update: installing %s on the way out", status.version.c_str());
+}
+
+bool App::takeUpdateAnnouncement(std::string& version)
+{
+    const auto status = updater_.status();
+    if (status.state != Updater::State::Ready || status.version.empty())
+        return false;
+    if (status.version == announcedUpdate_)
+        return false;
+
+    announcedUpdate_ = status.version;
+    version          = status.version;
+    return true;
 }
 
 std::string App::trayTooltip() const
@@ -830,25 +872,56 @@ void App::renderTopBar()
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Stops and reopens both audio devices.");
 
-        // Everything that is set once and then forgotten - the log, and where
-        // the window goes when it is dismissed - lives behind the cog. The
-        // transport bar is read at a glance while talking, and two more words
-        // of chrome cost more than the click they save.
+        // Everything that is set once and then forgotten - the log, the version,
+        // and where the window goes when it is dismissed - lives behind the cog.
+        // The transport bar is read at a glance while talking, and more words of
+        // chrome there cost more than the click they save.
         ImGui::SameLine();
-        const int problems = log::problemCount();
-        const bool open    = ImGui::IsPopupOpen("##options");
-        if (gearButton("##options-button", gearWidth,
-                       problems > 0 ? theme::kWarning : theme::kTextDim, open))
+        const int  problems = log::problemCount();
+        const auto update   = updater_.status();
+        const bool open     = ImGui::IsPopupOpen("##options");
+
+        // Two things can want attention through one cog, so they are ranked
+        // rather than blended: something went wrong beats something is
+        // available, and the tooltip says which it is either way.
+        const bool waitingUpdate = update.state == Updater::State::Available ||
+                                   update.state == Updater::State::Downloading ||
+                                   update.state == Updater::State::Ready;
+
+        const ImU32 gearTint = problems > 0     ? theme::kWarning
+                               : waitingUpdate  ? theme::kAccent
+                                                : theme::kTextDim;
+
+        if (gearButton("##options-button", gearWidth, gearTint, open))
             ImGui::OpenPopup("##options");
+
         if (ImGui::IsItemHovered()) {
+            char note[192];
+            int  written = std::snprintf(note, sizeof(note),
+                                         "Options - the log, the version, and where "
+                                         "the window goes.");
+
             if (problems > 0) {
-                ImGui::SetTooltip("Options - the log, and where the window goes.\n"
-                                  "%d problem%s logged.",
-                                  problems, problems == 1 ? "" : "s");
-            } else {
-                ImGui::SetTooltip("Options - the log, and where the window goes.");
+                written += std::snprintf(note + written, sizeof(note) - written,
+                                         "\n%d problem%s logged.", problems,
+                                         problems == 1 ? "" : "s");
             }
+            if (update.state == Updater::State::Ready) {
+                std::snprintf(note + written, sizeof(note) - written,
+                              "\nVersion %s is ready to install.", update.version.c_str());
+            } else if (update.state == Updater::State::Available) {
+                std::snprintf(note + written, sizeof(note) - written,
+                              "\nVersion %s has been released.", update.version.c_str());
+            }
+
+            ImGui::SetTooltip("%s", note);
         }
+
+        // Constrained because the update section inside can carry a paragraph of
+        // release notes, and an auto-sized popup holding one is either a column
+        // of single words or the width of the screen.
+        ImGui::SetNextWindowSizeConstraints(ImVec2(px(330.0f), 0.0f),
+                                            ImVec2(px(420.0f), FLT_MAX));
         if (ImGui::BeginPopup("##options")) {
             renderOptionsMenu();
             ImGui::EndPopup();
@@ -2263,6 +2336,24 @@ void App::renderOptionsMenu()
     if (problems > 0)
         ImGui::PopStyleColor();
 
+    // The one line of this menu that is an action rather than a setting, so it
+    // is only here while there is something to act on. The same decision can be
+    // reached from the section at the bottom; this is the version of it that
+    // does not need reading first.
+    if (updateReady()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kAccent));
+        char installLabel[64];
+        std::snprintf(installLabel, sizeof(installLabel), "Install update %s...",
+                      updateVersion().c_str());
+        if (ImGui::MenuItem(installLabel))
+            requestUpdateInstall();
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Closes RadioVoice, installs, and starts it again.\n"
+                              "Windows will ask for permission.");
+        }
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -2312,6 +2403,147 @@ void App::renderOptionsMenu()
     ImGui::TextWrapped("Hiding the window changes nothing about the audio path - "
                        "the microphone carries on being processed.");
     ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    renderUpdateSection();
+}
+
+void App::renderUpdateSection()
+{
+    const auto update = updater_.status();
+
+    const auto tinted = [](ImU32 colour, const char* text) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(colour));
+        ImGui::TextWrapped("%s", text);
+        ImGui::PopStyleColor();
+    };
+
+    // The release notes are the CHANGELOG section for that version, which is
+    // written for exactly this moment - someone deciding whether to take it.
+    const auto notes = [&] {
+        if (update.notes.empty())
+            return;
+
+        ImGui::Spacing();
+        // Sized rather than stretched: this sits in a popup that fits itself to
+        // its contents, and a child asking for "whatever is available" in one of
+        // those is a width defined in terms of itself.
+        ImGui::BeginChild("##notes", ImVec2(px(300.0f), px(150.0f)),
+                          ImGuiChildFlags_Borders);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
+        ImGui::TextWrapped("%s", update.notes.c_str());
+        ImGui::PopStyleColor();
+        ImGui::EndChild();
+    };
+
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
+    ImGui::TextUnformatted("VERSION");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    ImGui::Text("RadioVoice %s", RV_VERSION);
+    ImGui::Spacing();
+
+    switch (update.state) {
+        case Updater::State::Idle:
+            tinted(theme::kTextFaint, "No check has run yet.");
+            break;
+
+        case Updater::State::Checking:
+            tinted(theme::kTextDim, "Asking GitHub...");
+            break;
+
+        case Updater::State::UpToDate:
+            tinted(theme::kSignal, "This is the newest release.");
+            break;
+
+        case Updater::State::Available:
+            ImGui::Text("Version %s has been released.", update.version.c_str());
+            notes();
+            ImGui::Spacing();
+            if (update.downloadable) {
+                if (ImGui::Button("Download it", ImVec2(px(150.0f), 0)))
+                    updater_.download();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Fetches the installer and keeps it until you "
+                                      "ask for it.\nNothing is installed yet.");
+                }
+            } else {
+                tinted(theme::kTextFaint,
+                       "That release carries no installer, so there is nothing to "
+                       "fetch from here.");
+            }
+            break;
+
+        case Updater::State::Downloading:
+            ImGui::Text("Downloading version %s...", update.version.c_str());
+            ImGui::Spacing();
+            // A negative fraction is ImGui's indeterminate bar, which is what a
+            // server that sent no Content-Length leaves us with.
+            ImGui::ProgressBar(update.progress >= 0.0f
+                                   ? update.progress
+                                   : static_cast<float>(-1.0 * ImGui::GetTime()),
+                               ImVec2(px(300.0f), 0.0f));
+            break;
+
+        case Updater::State::Ready:
+            ImGui::Text("Version %s is ready to install.", update.version.c_str());
+            notes();
+            ImGui::Spacing();
+
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kAccentDim));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toVec4(theme::kAccent));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::toVec4(theme::kAccentFaint));
+            if (ImGui::Button("Install and restart", ImVec2(px(180.0f), 0)))
+                requestUpdateInstall();
+            ImGui::PopStyleColor(3);
+
+            ImGui::Spacing();
+            tinted(theme::kTextFaint,
+                   "RadioVoice closes, Windows asks whether to let the installer "
+                   "run, and it starts again when the installer is done. Devices, "
+                   "chain and every setting are kept.");
+            break;
+
+        case Updater::State::Failed:
+            tinted(theme::kWarning, "The last attempt did not get there:");
+            tinted(theme::kTextDim, update.error.c_str());
+            break;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Checkbox("Check for updates automatically", &config_.checkForUpdates)) {
+        updater_.setAutomatic(config_.checkForUpdates);
+        markDirty();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Once a day, RadioVoice asks GitHub which release is the\n"
+                          "newest. That is one request and nothing else - the\n"
+                          "installer is only fetched when you ask for it, and only\n"
+                          "installed when you say so.");
+    }
+
+    const bool busy = update.state == Updater::State::Checking ||
+                      update.state == Updater::State::Downloading;
+
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button("Check now", ImVec2(px(110.0f), 0)))
+        updater_.checkNow();
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Releases", ImVec2(px(110.0f), 0))) {
+        ::ShellExecuteW(nullptr, L"open", toWide(kReleasesUrl).c_str(), nullptr, nullptr,
+                        SW_SHOWNORMAL);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Opens the release list on GitHub.");
 }
 
 void App::renderTransportBar()

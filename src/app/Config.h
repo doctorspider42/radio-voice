@@ -66,6 +66,13 @@ struct Config {
     /// shortcut, which passes --minimized, and settable from the tray menu.
     bool startMinimized = false;
 
+    /// Whether to ask GitHub once a day whether there is a newer release.
+    ///
+    /// On by default, and it costs one request to the release list - nothing is
+    /// downloaded, and nothing is installed, until the user asks for it. Turning
+    /// it off stops the application touching the network at all.
+    bool checkForUpdates = true;
+
     /// Whether the side panels are folded away to a narrow strip.
     bool chainCollapsed = false;
     bool ioCollapsed    = false;

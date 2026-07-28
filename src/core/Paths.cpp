@@ -97,6 +97,14 @@ fs::path presetsDir()
     return d;
 }
 
+fs::path updatesDir()
+{
+    fs::path d = dataDir() / L"updates";
+    std::error_code ec;
+    fs::create_directories(d, ec);
+    return d;
+}
+
 std::vector<fs::path> defaultVst3Directories()
 {
     std::vector<fs::path> out;
