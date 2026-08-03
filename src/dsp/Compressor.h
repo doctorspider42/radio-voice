@@ -45,7 +45,21 @@ public:
     void reset() override;
     void process(PlanarBuffer& buffer) override;
 
-    int latencySamples() const override { return delaySamples_; }
+    /// Nothing while it is switched off, for the reason given on NoiseGate:
+    /// the disabled branch does not delay the signal, so neither should the
+    /// figure reported for it.
+    int latencySamples() const override { return isEnabled() ? delaySamples_ : 0; }
+
+    /// The switch on the panel and the one in the chain list are this one flag.
+    bool isEnabled() const override
+    {
+        return params_.compEnabled.load(std::memory_order_relaxed);
+    }
+    void setEnabled(bool on) override
+    {
+        params_.compEnabled.store(on, std::memory_order_relaxed);
+        params_.touch();
+    }
 
     /// The static curve, in dB in and dB out, for the transfer plot in the UI.
     /// Reads the parameter block directly so it can be called from the UI

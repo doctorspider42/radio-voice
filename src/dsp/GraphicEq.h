@@ -24,6 +24,19 @@ public:
     void reset() override;
     void process(PlanarBuffer& buffer) override;
 
+    /// The switch on the panel and the one in the chain list are this one flag.
+    /// The high- and low-cut have switches of their own and are not touched:
+    /// this is the equaliser's switch, exactly as on the panel.
+    bool isEnabled() const override
+    {
+        return params_.eqEnabled.load(std::memory_order_relaxed);
+    }
+    void setEnabled(bool on) override
+    {
+        params_.eqEnabled.store(on, std::memory_order_relaxed);
+        params_.touch();
+    }
+
     /// Combined magnitude response in dB at `hz`, for the curve in the UI.
     /// Safe to call from the UI thread: it reads the parameter block directly
     /// and designs throwaway filters rather than touching live state.

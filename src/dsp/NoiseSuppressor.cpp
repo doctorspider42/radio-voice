@@ -118,9 +118,10 @@ void NoiseSuppressor::process(PlanarBuffer& buffer)
 
     // Switched off still means running, at a mix of zero. The frames keep
     // flowing through the network so its recurrent state stays current, and the
-    // reported latency stays put - both of which would otherwise change under
-    // the user the moment they toggled the switch, which is a click and a
-    // second of the model re-learning the room.
+    // delay stays put because the dry path is held back by a frame whatever the
+    // mix says - both of which would otherwise change under the user the moment
+    // they toggled the switch, which is a click and a second of the model
+    // re-learning the room.
     const float amount =
         params_.denoiseEnabled.load(std::memory_order_relaxed)
             ? std::clamp(params_.denoiseAmount.load(std::memory_order_relaxed), 0.0f, 1.0f)
@@ -147,6 +148,17 @@ void NoiseSuppressor::process(PlanarBuffer& buffer)
             if (channel.readAt + 1 < kFrameSize)
                 ++channel.readAt;
 
+            // The dry signal has to be delayed by exactly as much as the wet
+            // one, or the mix is a comb filter: the same voice arriving twice,
+            // 10 ms apart, which is heard as a small room rather than as a
+            // blend. That is why any setting short of 100% sounded reverberant.
+            //
+            // No delay line is needed for it. `input[filled]` is the slot about
+            // to be overwritten, so it still holds the sample from a whole
+            // frame ago - which is precisely the sample that produced `wet`,
+            // because `filled` and `readAt` advance together.
+            const float dry = channel.input[static_cast<size_t>(channel.filled)] * kFromRnnoise;
+
             channel.input[static_cast<size_t>(channel.filled++)] = samples[i] * kToRnnoise;
 
             if (channel.filled == kFrameSize) {
@@ -163,7 +175,7 @@ void NoiseSuppressor::process(PlanarBuffer& buffer)
             }
 
             const float blend = mix.next();
-            samples[i] = samples[i] * (1.0f - blend) + wet * blend;
+            samples[i] = dry * (1.0f - blend) + wet * blend;
         }
 
         if (c == channels - 1)

@@ -35,7 +35,23 @@ public:
     void reset() override;
     void process(PlanarBuffer& buffer) override;
 
-    int latencySamples() const override { return delaySamples_; }
+    /// Nothing while it is switched off: the disabled branch passes the signal
+    /// through undelayed, so counting the look-ahead there would overstate the
+    /// figure the user is shown. The chain used to arrive at the same answer by
+    /// skipping a bypassed node altogether, which is no longer how a built-in
+    /// module is switched off.
+    int latencySamples() const override { return isEnabled() ? delaySamples_ : 0; }
+
+    /// The switch on the panel and the one in the chain list are this one flag.
+    bool isEnabled() const override
+    {
+        return params_.gateEnabled.load(std::memory_order_relaxed);
+    }
+    void setEnabled(bool on) override
+    {
+        params_.gateEnabled.store(on, std::memory_order_relaxed);
+        params_.touch();
+    }
 
 private:
     void updateSettings();

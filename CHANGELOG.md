@@ -9,6 +9,27 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.1] — 2026-08-03
+
+### Fixed
+
+- **Noise suppression at anything below 100% sounded like a small room.** The
+  cleaned signal leaves the model 10 ms behind the original, and the two were
+  being mixed as they arrived — so every setting short of full suppression was
+  adding your voice to itself, 10 ms late. That is not a blend, it is a comb
+  filter, and it is heard as reverb. The original is now held back by exactly
+  that much, so the slider does what it says: less suppression, more of the room
+  you are actually in, and nothing else. Full suppression was never affected.
+- **A built-in module had two switches that did not agree.** The gate, the
+  equaliser, the compressor and the suppressor can each be switched off from
+  their own panel and from the chain list, and the two were separate pieces of
+  state — so one could say off while the other said on, and which one the sound
+  followed depended on which you had reached for last. They are one switch now,
+  wherever you touch it.
+
+  If you had switched a built-in module off from the chain list, it comes back
+  on once: its panel switch is the one that survives the upgrade.
+
 ## [0.4.0] — 2026-07-28
 
 ### Added

@@ -23,6 +23,9 @@ namespace rv::dsp {
 ///  * It works in fixed frames of 480 samples at 48 kHz. Blocks arriving from
 ///    the engine are any size at all, so the two are bridged by a FIFO, and the
 ///    cost is 480 samples of delay - reported honestly through latencySamples.
+///    The dry side of the mix is delayed by the same frame, so a partial mix
+///    blends two copies of the same instant rather than comb-filtering one
+///    against a 10 ms echo of itself.
 ///
 ///  * It is mono. Each channel gets its own instance, which is also the only
 ///    correct choice: a shared one would let one channel's noise estimate
@@ -48,6 +51,16 @@ public:
     void process(PlanarBuffer& buffer) override;
 
     int latencySamples() const override { return active_ ? kFrameSize : 0; }
+
+    /// The switch on the panel and the one in the chain list are this one flag.
+    bool isEnabled() const override
+    {
+        return params_.denoiseEnabled.load(std::memory_order_relaxed);
+    }
+    void setEnabled(bool on) override
+    {
+        params_.denoiseEnabled.store(on, std::memory_order_relaxed);
+    }
 
     /// True when the library is compiled in and running at a rate it supports.
     /// The panel says so rather than leaving a control that does nothing.

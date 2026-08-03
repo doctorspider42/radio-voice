@@ -492,7 +492,14 @@ void App::buildChainFromConfig()
         if (!node)
             continue;
 
-        node->setBypassed(entry.bypassed);
+        // Only a plugin's switch is stored with the chain entry. A built-in
+        // module's lives in the parameter block, which is what both its panel
+        // and the chain list now read - and honouring a `bypassed` written by a
+        // build that kept the two apart would restore the copy the user cannot
+        // see, over the one they can.
+        if (node->kind() == dsp::NodeKind::Vst3Plugin)
+            node->setBypassed(entry.bypassed);
+
         chainNodes_.push_back(std::move(node));
     }
 
@@ -2072,7 +2079,7 @@ void App::renderChainPanel()
         auto& node = chainNodes_[i];
         ImGui::PushID(static_cast<int>(node->id()));
 
-        const bool bypassed = node->isBypassed();
+        const bool bypassed = !node->isEnabled();
         const bool isPlugin = node->kind() == dsp::NodeKind::Vst3Plugin;
         const bool isDragged = dragging && node->id() == dragNodeId_;
 
@@ -2174,13 +2181,16 @@ void App::renderChainPanel()
         // module is doing something. The inverse - a lit switch meaning the
         // module is switched out of the path - is backwards from how every
         // other control in the application behaves.
+        //
+        // For a built-in module this is the same switch as the one on its
+        // panel, not a second one beside it - see ProcessorNode::setEnabled.
         bool enabled = !bypassed;
         if (toggleSwitch("enable", &enabled)) {
-            node->setBypassed(!enabled);
+            node->setEnabled(enabled);
             markDirty();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(enabled ? "active - click to bypass" : "bypassed");
+            ImGui::SetTooltip(enabled ? "active - click to switch off" : "switched off");
 
         if (isPlugin) {
             auto* plugin = static_cast<host::Vst3Plugin*>(node.get());
