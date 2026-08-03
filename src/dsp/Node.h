@@ -49,6 +49,23 @@ public:
     bool isBypassed() const noexcept { return bypassed_.load(std::memory_order_relaxed); }
     void setBypassed(bool b) noexcept { bypassed_.store(b, std::memory_order_relaxed); }
 
+    /// Whether the module is switched on, as the user means it.
+    ///
+    /// For a plugin that is the bypass flag and nothing more. A built-in module
+    /// carries a second switch on its own panel, backed by the parameter block,
+    /// and the two must not be separate pieces of state: one of them would then
+    /// be off while the other said on, and which of the two the sound followed
+    /// would depend on which one the user had reached for last. So the built-in
+    /// modules override this to answer from their parameter, and their bypass
+    /// flag is left alone.
+    ///
+    /// It is also the better switch for them on its own merits. Skipping the
+    /// node outright drops its delay line and its detector state out of the
+    /// path; the modules' own disabled branches keep both running and only stop
+    /// acting on the signal, so switching back on does not splice.
+    virtual bool isEnabled() const { return !isBypassed(); }
+    virtual void setEnabled(bool on) { setBypassed(!on); }
+
     /// Stable handle used by the UI and by the saved configuration to refer to
     /// this node across chain rebuilds.
     u64 id() const noexcept { return id_; }
