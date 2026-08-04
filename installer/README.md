@@ -135,6 +135,25 @@ the machine's trusted root store — and it says so in those words rather than i
 reassuring ones. If the wording ever gets softened, the page has stopped doing
 its job.
 
+With one exception: a silent Setup. `NextButtonClick` is called on silent
+installs too — Inno Setup simulates the clicks — and there the checkbox is one
+nobody was in a position to tick, so refusing to advance only kills the
+install. That is what the application's own updater ran into: it starts Setup
+with `/SILENT`, and every update of an installation that includes the driver
+stopped dead at a message box, on a wizard that was not on screen.
+
+So `NextButtonClick` returns early when `WizardSilent`. Consent is not being
+inferred from silence: a silent run touches the driver only where the driver
+component is selected, which on an upgrade is the choice made on this page the
+first time. It also never turns test signing on — the second checkbox is False
+in silent mode and stays that way, so an unattended update cannot rewrite a
+boot configuration or ask for a restart.
+
+For the same reason every message box in the driver install path is a
+`SuppressibleMsgBox`, not a `MsgBox`. `/SUPPRESSMSGBOXES` has no effect on a
+plain `MsgBox`, and a dialog waiting behind a wizard nobody can see is
+indistinguishable from a hang.
+
 ---
 
 ## CI
