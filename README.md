@@ -7,6 +7,10 @@ a microphone.
 
 C++20, Dear ImGui and Direct3D 11. WASAPI, ASIO and DirectSound backends.
 
+![The RadioVoice window: devices on the left, the equaliser over the live input
+spectrum, gate, compressor and limiter below, and the processing chain on the
+right](docs/screenshot.png)
+
 ---
 
 ## Quickstart
