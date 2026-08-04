@@ -35,6 +35,7 @@ untranslated one.
 - `src/app` — application state, panels, configuration
 - `src/main.cpp` — the only file that knows about HWNDs and device contexts
 - `res` — manifest, version info, icon (see below)
+- `docs` — images the documentation points at; nothing the build touches
 - `tools` — scripts that are not part of the build
 - `installer` — Inno Setup script, and the staging that folds the driver into it
 - `driver` — the kernel driver and its own tooling; see `driver/README.md`

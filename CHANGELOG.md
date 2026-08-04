@@ -9,6 +9,14 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.3] — 2026-08-04
+
+### Changed
+
+- **The README shows the window now.** Nothing about the program has changed —
+  it is the same 0.4.2 underneath — but anyone deciding whether to download it
+  can see what they would be getting first.
+
 ## [0.4.2] — 2026-08-04
 
 ### Fixed
