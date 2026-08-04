@@ -420,6 +420,19 @@ begin
   Result := True;
   if CurPageID = DriverPage.ID then
   begin
+    // A silent Setup has no wizard, but it still comes through here: Inno
+// Setup simulates the Next clicks, and this page's checkbox is one nobody was
+// there to tick. Refusing to advance then is not consent - it is an update
+// that dies at a dialog, which is precisely what the application's own updater
+// hit, because it starts Setup with /SILENT.
+    //
+    // Silence is not being read as agreement. A silent run installs the driver
+// only where the driver component is selected, and on an upgrade that
+// selection is the one made on this page the first time round. It also leaves
+// test signing alone - see InstallDriver.
+    if WizardSilent then
+      Exit;
+
     // Deliberately blocking. The whole point of the page is that this is not
 // something to click past.
     if not DriverPage.Values[0] then
@@ -430,16 +443,28 @@ begin
   end;
 end;
 
+// Every message box from here on is suppressible. A plain MsgBox is shown even
+// when Setup was started with /SUPPRESSMSGBOXES - only SuppressibleMsgBox
+// honours it - and an unattended update that stops on a dialog nobody is
+// looking at is an update that does not happen.
 procedure InstallDriver;
 var
   Code: Integer;
 begin
+  // CurPageChanged only fires for a page that was actually shown, so on a
+// silent run this is where the boot configuration gets read instead. The
+// second checkbox is untouched there, still False from when the page was
+// built: an update running by itself is not the moment to rewrite somebody's
+// boot configuration and ask for a restart.
+  if WizardSilent then
+    TestSigningWasOn := IsTestSigningOn;
+
   if (not TestSigningWasOn) and DriverPage.Values[1] then
   begin
     WizardForm.StatusLabel.Caption := CustomMessage('StatusTestSigning');
     if not Exec(ExpandConstant('{cmd}'), '/C bcdedit /set testsigning on', '',
                 SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
-      MsgBox(CustomMessage('TestSigningFailed'), mbError, MB_OK)
+      SuppressibleMsgBox(CustomMessage('TestSigningFailed'), mbError, MB_OK, IDOK)
     else
       DriverRebootNeeded := True;
   end;
@@ -449,8 +474,8 @@ begin
                           '-Path "' + ExpandConstant('{app}\driver\RadioVoiceTest.cer') + '"');
   if Code <> 0 then
   begin
-    MsgBox(FmtMessage(CustomMessage('DriverFailed'), ['trust-cert.ps1 -> ' + IntToStr(Code)]),
-           mbError, MB_OK);
+    SuppressibleMsgBox(FmtMessage(CustomMessage('DriverFailed'), ['trust-cert.ps1 -> ' + IntToStr(Code)]),
+                       mbError, MB_OK, IDOK);
     Exit;
   end;
 
@@ -459,8 +484,8 @@ begin
                           '-Path "' + ExpandConstant('{app}\driver') + '"');
   if Code <> 0 then
   begin
-    MsgBox(FmtMessage(CustomMessage('DriverFailed'), ['install.ps1 -> ' + IntToStr(Code)]),
-           mbError, MB_OK);
+    SuppressibleMsgBox(FmtMessage(CustomMessage('DriverFailed'), ['install.ps1 -> ' + IntToStr(Code)]),
+                       mbError, MB_OK, IDOK);
     Exit;
   end;
 
@@ -470,7 +495,7 @@ begin
     DriverRebootNeeded := True;
 
   if DriverRebootNeeded then
-    MsgBox(CustomMessage('RebootNeeded'), mbInformation, MB_OK);
+    SuppressibleMsgBox(CustomMessage('RebootNeeded'), mbInformation, MB_OK, IDOK);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

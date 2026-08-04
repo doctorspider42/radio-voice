@@ -9,6 +9,22 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.2] — 2026-08-04
+
+### Fixed
+
+- **Updates could not install themselves if you had the driver.** The update
+  ran, and then stopped at a message box reading *Tick "I understand", or go
+  back and clear the driver component* — a wizard page that was not on screen,
+  asking for a tick nobody could give. Clicking OK left the old version exactly
+  where it was. The page that warns about the unsigned driver is there for
+  someone installing it for the first time, and it still refuses to be clicked
+  past; it no longer stands in front of an update that is running by itself.
+
+  If you have been stuck on an older version, this is why, and updating from
+  here on should simply work. The update still leaves your boot configuration
+  alone: test signing is only ever turned on from the wizard, by hand.
+
 ## [0.4.1] — 2026-08-03
 
 ### Fixed
