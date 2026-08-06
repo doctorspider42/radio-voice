@@ -2874,7 +2874,15 @@ void App::renderLogWindow()
     }
 
     ImGui::SameLine();
+    if (ImGui::Button("Clear log"))
+        logClearFailed_ = !log::clear();
+
+    ImGui::SameLine();
     ImGui::TextDisabled("click a line to copy it");
+
+    if (logClearFailed_)
+        ImGui::TextColored(theme::toVec4(theme::kDanger),
+                           "The log was cleared from memory, but the file could not be reset.");
 
     ImGui::Separator();
 

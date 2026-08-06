@@ -41,6 +41,14 @@ const char* levelTag(Level l)
     return "???";
 }
 
+std::FILE* openLogFile()
+{
+    std::FILE* file = _wfopen(paths::logFile().c_str(), L"wb");
+    if (file)
+        std::fwrite("\xEF\xBB\xBF", 1, 3, file);
+    return file;
+}
+
 } // namespace
 
 void init()
@@ -56,9 +64,7 @@ void init()
     // wide-oriented, and every write below is narrow. Mixing the two is
     // undefined and crashes on the first fprintf. Log text is already UTF-8,
     // so the bytes only need a BOM in front for editors to detect it.
-    s.file = _wfopen(paths::logFile().c_str(), L"wb");
-    if (s.file)
-        std::fwrite("\xEF\xBB\xBF", 1, 3, s.file);
+    s.file = openLogFile();
 }
 
 void shutdown()
@@ -114,6 +120,23 @@ std::vector<Entry> snapshot()
     State& s = state();
     std::lock_guard lock(s.mutex);
     return {s.entries.begin(), s.entries.end()};
+}
+
+bool clear()
+{
+    State& s = state();
+    std::lock_guard lock(s.mutex);
+
+    s.entries.clear();
+    s.problems = 0;
+
+    if (s.file) {
+        std::fclose(s.file);
+        s.file = nullptr;
+    }
+
+    s.file = openLogFile();
+    return s.file != nullptr;
 }
 
 int problemCount()

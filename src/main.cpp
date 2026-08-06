@@ -40,6 +40,10 @@ constexpr UINT WM_RV_TRAY = WM_APP + 1;
 /// Identifies our icon within this window. Only one, so any value will do.
 constexpr UINT kTrayIconId = 1;
 
+/// A missing Explorer or notification area should not turn the one-second
+/// status refresh into a stream of failed Shell_NotifyIcon calls.
+constexpr ULONGLONG kTrayRetryDelayMs = 15'000;
+
 enum TrayCommand : UINT {
     kTrayToggleWindow = 1,
     kTrayMute,
@@ -51,6 +55,11 @@ enum TrayCommand : UINT {
 HINSTANCE g_instance = nullptr;
 
 bool g_trayIconAdded = false;
+/// The earliest time at which a failed icon registration is retried.
+ULONGLONG g_nextTrayIconAttempt = 0;
+/// One warning per uninterrupted failure is enough; a tray icon may be
+/// unavailable briefly while Explorer is restarting.
+bool g_trayIconFailureLogged = false;
 /// Whether the balloon explaining where the window went has already been shown.
 /// Once per run: it is an answer to a surprise, and it stops being one.
 bool g_trayHintShown = false;
@@ -176,6 +185,16 @@ HICON loadAppIcon(HINSTANCE instance, int widthMetric, int heightMetric)
                                            LR_SHARED));
 }
 
+/// Supplies a usable tray image even if the executable's icon resource cannot
+/// be loaded, for example from a damaged or partially replaced installation.
+HICON loadTrayIcon()
+{
+    HICON icon = loadAppIcon(g_instance, SM_CXSMICON, SM_CYSMICON);
+    if (!icon)
+        icon = ::LoadIconW(nullptr, IDI_APPLICATION);
+    return icon;
+}
+
 // ---------------------------------------------------------------------------
 // Notification area
 //
@@ -213,18 +232,35 @@ void addTrayIcon(HWND hwnd)
     if (g_trayIconAdded)
         return;
 
+    const ULONGLONG now = ::GetTickCount64();
+    if (now < g_nextTrayIconAttempt)
+        return;
+
     NOTIFYICONDATAW data = trayIconBase(hwnd);
     data.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     data.uCallbackMessage = WM_RV_TRAY;
-    data.hIcon            = loadAppIcon(g_instance, SM_CXSMICON, SM_CYSMICON);
+    data.hIcon            = loadTrayIcon();
     ::lstrcpynW(data.szTip, kWindowTitle, ARRAYSIZE(data.szTip));
 
-    if (!::Shell_NotifyIconW(NIM_ADD, &data)) {
-        RV_WARN("could not add the notification icon");
+    if (!data.hIcon || !::Shell_NotifyIconW(NIM_ADD, &data)) {
+        g_nextTrayIconAttempt = now + kTrayRetryDelayMs;
+        if (!g_trayIconFailureLogged) {
+            RV_WARN("could not add the notification icon; retrying in %llu seconds",
+                    static_cast<unsigned long long>(kTrayRetryDelayMs / 1000));
+            g_trayIconFailureLogged = true;
+        }
         return;
     }
 
     g_trayIconAdded = true;
+    g_nextTrayIconAttempt = 0;
+    g_trayIconFailureLogged = false;
+
+    // The most recent notification-area behaviour is opt-in after every
+    // successful registration, including one after Explorer restarts.
+    data.uVersion = NOTIFYICON_VERSION_4;
+    ::Shell_NotifyIconW(NIM_SETVERSION, &data);
+
     updateTrayTooltip(hwnd);
 }
 
@@ -422,8 +458,9 @@ LRESULT WINAPI windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         // Explorer restarted and took every notification icon with it. The
         // window may well be hidden, in which case this icon is the only way
         // back to it.
-        if (g_trayIconAdded) {
+        if (g_trayIconAdded || (g_app && g_app->trayEnabled())) {
             g_trayIconAdded = false;
+            g_nextTrayIconAttempt = 0;
             addTrayIcon(hwnd);
         }
         return 0;

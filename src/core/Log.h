@@ -25,6 +25,10 @@ void write(Level level, const char* fmt, ...);
 /// Copy of the in-memory tail, newest last, for the log panel in the UI.
 std::vector<Entry> snapshot();
 
+/// Clears the in-memory tail and starts a new on-disk log. Returns false when
+/// the log file could not be reopened; logging then continues in memory.
+bool clear();
+
 /// Number of entries at Warning or above since start, so the UI can badge the
 /// log button without copying the whole buffer every frame.
 int problemCount();

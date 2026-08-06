@@ -223,6 +223,7 @@ private:
     bool wantsExit_          = false;
     bool showPluginBrowser_  = false;
     bool showLog_            = false;
+    bool logClearFailed_     = false;
     bool configDirty_        = false;
     double lastSaveTime_     = 0.0;
 

@@ -9,6 +9,22 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.4] — 2026-08-06
+
+### Added
+
+- **Logs can now be cleared from the Log window.** The action clears both the
+  entries shown in RadioVoice and the saved `radiovoice.log` file, so a new
+  recording or troubleshooting session starts with a clean slate.
+
+### Fixed
+
+- **A missing notification-area icon no longer floods the log.** RadioVoice
+  now falls back to a system icon if its own icon cannot load, opts into the
+  current Windows notification-area behaviour, and waits before retrying a
+  registration that Explorer cannot accept. One unavailable tray icon no
+  longer becomes a warning every second.
+
 ## [0.4.3] — 2026-08-04
 
 ### Changed
