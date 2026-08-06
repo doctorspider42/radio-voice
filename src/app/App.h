@@ -149,6 +149,11 @@ private:
     /// Restarts the engine once a changed device selection has settled.
     void applyPendingDeviceChange();
 
+    /// Reopens the main streams after Windows rebuilds an endpoint beneath an
+    /// active WASAPI client. This is particularly common just after a virtual
+    /// cable driver first starts.
+    void recoverInvalidatedDevice();
+
     /// `allowAsio` is false for the monitor: an ASIO driver opens its device
     /// exclusively, so offering it there would let the user pick a backend that
     /// can only contend with the main path.
@@ -215,6 +220,11 @@ private:
     /// restarting on the first change would tear the engine down twice and open
     /// a device nobody asked for in between.
     double deviceChangeSeenAt_ = -1.0;
+
+    /// Time the current endpoint invalidation was first observed. A brief wait
+    /// gives Plug and Play time to publish the replacement endpoint before the
+    /// saved device id is rebound by name.
+    double deviceRecoverySeenAt_ = -1.0;
 
     void*      mainWindow_ = nullptr;
     gui::Fonts fonts_{};

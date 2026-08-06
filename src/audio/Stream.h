@@ -53,6 +53,10 @@ public:
 
     /// Empty while healthy; set when the stream failed to open or died.
     virtual const std::string& error() const = 0;
+
+    /// True when Windows invalidated an already-running endpoint. The caller
+    /// must create a new stream; an IAudioClient cannot be revived in place.
+    virtual bool deviceInvalidated() const { return false; }
 };
 
 /// Capture side.

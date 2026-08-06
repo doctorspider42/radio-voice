@@ -138,6 +138,11 @@ public:
     /// Refreshes the UI-thread-derived meter fields. Call once per frame.
     void updateSlowMeters();
 
+    /// Whether a main WASAPI endpoint disappeared after it was started. The
+    /// application recreates the engine instead of leaving it "running" with a
+    /// dead output thread.
+    bool deviceRecoveryNeeded() const;
+
     /// The ASIO stream, when one is open, so the UI can offer its control
     /// panel. Null for every other backend.
     AsioStream* asioStream() const { return asioShared_.get(); }

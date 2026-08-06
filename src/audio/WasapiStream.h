@@ -29,6 +29,10 @@ public:
     u32    xruns() const { return xruns_.load(std::memory_order_relaxed); }
 
     const std::string& error() const { return error_; }
+    bool deviceInvalidated() const
+    {
+        return deviceInvalidated_.load(std::memory_order_acquire);
+    }
 
     SampleFormat wireFormat() const { return sampleFormat_; }
     WasapiMode   mode() const { return mode_; }
@@ -44,6 +48,7 @@ protected:
 
     void launchThread();
     void fail(const char* what, HRESULT hr);
+    void markDeviceInvalidated(const char* direction);
 
     ComPtr<IMMDevice>    device_;
     ComPtr<IAudioClient> client_;
@@ -62,6 +67,7 @@ protected:
 
     std::thread       thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> deviceInvalidated_{false};
     std::atomic<u32>  xruns_{0};
     std::string       error_;
 
@@ -87,6 +93,10 @@ public:
     int latencyFrames() const override { return WasapiStreamBase::latencyFrames(); }
     u32 xruns() const override { return WasapiStreamBase::xruns(); }
     const std::string& error() const override { return WasapiStreamBase::error(); }
+    bool deviceInvalidated() const override
+    {
+        return WasapiStreamBase::deviceInvalidated();
+    }
 
 protected:
     void threadBody() override;
@@ -111,6 +121,10 @@ public:
     int latencyFrames() const override { return WasapiStreamBase::latencyFrames(); }
     u32 xruns() const override { return WasapiStreamBase::xruns(); }
     const std::string& error() const override { return WasapiStreamBase::error(); }
+    bool deviceInvalidated() const override
+    {
+        return WasapiStreamBase::deviceInvalidated();
+    }
 
 protected:
     void threadBody() override;

@@ -633,6 +633,7 @@ void App::render()
     // Both act on what the widgets left in config_ last frame, so they run
     // before anything is drawn again.
     syncMonitor();
+    recoverInvalidatedDevice();
     applyPendingDeviceChange();
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1076,6 +1077,32 @@ void App::applyPendingDeviceChange()
         return;
 
     deviceChangeSeenAt_ = -1.0;
+    restartEngine();
+}
+
+void App::recoverInvalidatedDevice()
+{
+    if (!engine_ || !engine_->deviceRecoveryNeeded()) {
+        deviceRecoverySeenAt_ = -1.0;
+        return;
+    }
+
+    const double now = ImGui::GetTime();
+    if (deviceRecoverySeenAt_ < 0.0) {
+        deviceRecoverySeenAt_ = now;
+        return;
+    }
+
+    // The old endpoint has already gone, but Windows may need a moment to
+    // create its replacement. Retrying immediately would only reopen the same
+    // stale id and turn a recoverable PnP transition into a startup error.
+    constexpr double kEndpointSettleSeconds = 1.0;
+    if (now - deviceRecoverySeenAt_ < kEndpointSettleSeconds)
+        return;
+
+    deviceRecoverySeenAt_ = -1.0;
+    devices_.refresh();
+    RV_INFO("audio endpoint was rebuilt; reopening the processing streams");
     restartEngine();
 }
 

@@ -9,6 +9,15 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.5] — 2026-08-06
+
+### Fixed
+
+- **A virtual cable rebuilding itself no longer leaves RadioVoice apparently
+  running with a dead output stream.** RadioVoice now waits for Windows to
+  publish the replacement endpoint, rebinds it, and resumes processing
+  automatically without raising a spurious log problem.
+
 ## [0.4.4] — 2026-08-06
 
 ### Added

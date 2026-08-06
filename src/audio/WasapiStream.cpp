@@ -48,6 +48,16 @@ void WasapiStreamBase::fail(const char* what, HRESULT hr)
     RV_ERROR("WASAPI %s", error_.c_str());
 }
 
+void WasapiStreamBase::markDeviceInvalidated(const char* direction)
+{
+    // An invalidated IAudioClient can never be restarted. It is common for a
+    // virtual endpoint to be rebuilt just after the first client opens it, so
+    // leave recovery to the UI thread instead of presenting a transient event
+    // as a red error in the log.
+    deviceInvalidated_.store(true, std::memory_order_release);
+    RV_INFO("WASAPI %s device invalidated; scheduling stream recovery", direction);
+}
+
 void WasapiStreamBase::closeClient()
 {
     client_.reset();
@@ -104,6 +114,7 @@ void WasapiStreamBase::launchThread()
 bool WasapiStreamBase::openClient(const StreamConfig& config, bool capture)
 {
     error_.clear();
+    deviceInvalidated_.store(false, std::memory_order_release);
     mode_ = config.wasapiMode;
 
     auto enumerator = wasapi::createEnumerator();
@@ -359,13 +370,19 @@ void WasapiInputStream::threadBody()
     ComPtr<IAudioCaptureClient> capture;
     HRESULT hr = client_->GetService(wasapi::kIidIAudioCaptureClient, capture.putVoid());
     if (FAILED(hr)) {
-        fail("could not obtain the capture service", hr);
+        if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+            markDeviceInvalidated("capture");
+        else
+            fail("could not obtain the capture service", hr);
         running_.store(false, std::memory_order_release);
         return;
     }
 
     if (FAILED(hr = client_->Start())) {
-        fail("could not start the capture stream", hr);
+        if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+            markDeviceInvalidated("capture");
+        else
+            fail("could not start the capture stream", hr);
         running_.store(false, std::memory_order_release);
         return;
     }
@@ -397,7 +414,10 @@ void WasapiInputStream::threadBody()
             if (hr == AUDCLNT_S_BUFFER_EMPTY)
                 break;
             if (FAILED(hr)) {
-                fail("capture GetBuffer failed", hr);
+                if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+                    markDeviceInvalidated("capture");
+                else
+                    fail("capture GetBuffer failed", hr);
                 running_.store(false, std::memory_order_release);
                 break;
             }
@@ -460,7 +480,10 @@ void WasapiOutputStream::threadBody()
     ComPtr<IAudioRenderClient> render;
     HRESULT hr = client_->GetService(wasapi::kIidIAudioRenderClient, render.putVoid());
     if (FAILED(hr)) {
-        fail("could not obtain the render service", hr);
+        if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+            markDeviceInvalidated("render");
+        else
+            fail("could not obtain the render service", hr);
         running_.store(false, std::memory_order_release);
         return;
     }
@@ -472,7 +495,10 @@ void WasapiOutputStream::threadBody()
         render->ReleaseBuffer(static_cast<UINT32>(bufferFrames_), AUDCLNT_BUFFERFLAGS_SILENT);
 
     if (FAILED(hr = client_->Start())) {
-        fail("could not start the render stream", hr);
+        if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+            markDeviceInvalidated("render");
+        else
+            fail("could not start the render stream", hr);
         running_.store(false, std::memory_order_release);
         return;
     }
@@ -505,7 +531,7 @@ void WasapiOutputStream::threadBody()
         hr = render->GetBuffer(frames, &data);
         if (FAILED(hr)) {
             if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
-                fail("render device invalidated", hr);
+                markDeviceInvalidated("render");
                 break;
             }
             xruns_.fetch_add(1, std::memory_order_relaxed);
