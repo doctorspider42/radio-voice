@@ -648,6 +648,12 @@ void Engine::updateSlowMeters()
         meters_.outputXruns.store(output_->xruns(), std::memory_order_relaxed);
 }
 
+bool Engine::deviceRecoveryNeeded() const
+{
+    return (input_ && input_->deviceInvalidated()) ||
+           (output_ && output_->deviceInvalidated());
+}
+
 // ---------------------------------------------------------------------------
 // Audio thread
 // ---------------------------------------------------------------------------
