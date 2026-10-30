@@ -9,6 +9,15 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.7] — 2026-10-30
+
+### Changed
+
+- **A shorter introduction to RadioVoice.** The README now puts the download,
+  screenshot, main features, and setup steps up front, with release and build
+  badges and direct links to the detailed guides. Driver requirements and
+  current limitations remain visible.
+
 ## [0.4.6] — 2026-10-30
 
 ### Fixed
