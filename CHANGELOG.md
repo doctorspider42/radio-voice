@@ -9,6 +9,20 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.4.6] — 2026-10-30
+
+### Fixed
+
+- **The window stays responsive after opening it from the notification area.**
+  Rendering now avoids the legacy DirectX presentation path that could block
+  the interface while audio kept running. A busy desktop compositor skips a
+  frame instead of holding up close, minimise, and tray commands.
+- **Closing or minimising a restored window no longer gets stuck when the
+  notification icon loses sync with Explorer.** RadioVoice reconnects to an
+  existing icon instead of repeatedly trying to add it. If the notification
+  area is unavailable, the window minimises to the taskbar so it remains
+  accessible, including when starting with no window. Audio keeps running.
+
 ## [0.4.5] — 2026-08-06
 
 ### Fixed

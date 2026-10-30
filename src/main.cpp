@@ -119,13 +119,15 @@ bool createDeviceD3D(HWND hwnd)
     desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.BufferDesc.RefreshRate.Numerator   = 60;
     desc.BufferDesc.RefreshRate.Denominator = 1;
-    desc.Flags        = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    desc.Flags        = 0;
     desc.BufferUsage  = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     desc.OutputWindow = hwnd;
     desc.SampleDesc.Count   = 1;
     desc.SampleDesc.Quality = 0;
     desc.Windowed   = TRUE;
-    desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    // Share buffers with DWM instead of using the legacy windowed blit path,
+    // which can stall in PrepareWindowedBltPresent after a tray restore.
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
     const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
     D3D_FEATURE_LEVEL       obtained = D3D_FEATURE_LEVEL_11_0;
@@ -242,7 +244,11 @@ void addTrayIcon(HWND hwnd)
     data.hIcon            = loadTrayIcon();
     ::lstrcpynW(data.szTip, kWindowTitle, ARRAYSIZE(data.szTip));
 
-    if (!data.hIcon || !::Shell_NotifyIconW(NIM_ADD, &data)) {
+    // Explorer can announce TaskbarCreated while our icon still exists. In
+    // that case NIM_ADD fails; modifying the same (window, id) reconciles our
+    // state with the shell instead of leaving every hide request blocked.
+    if (!data.hIcon || (!::Shell_NotifyIconW(NIM_ADD, &data) &&
+                       !::Shell_NotifyIconW(NIM_MODIFY, &data))) {
         g_nextTrayIconAttempt = now + kTrayRetryDelayMs;
         if (!g_trayIconFailureLogged) {
             RV_WARN("could not add the notification icon; retrying in %llu seconds",
@@ -325,10 +331,13 @@ void hideToTray(HWND hwnd)
     // Added before the window goes, not after: a window that disappears while
     // the icon fails to appear leaves nothing to click.
     addTrayIcon(hwnd);
-    if (!g_trayIconAdded)
-        return;
-
-    ::ShowWindow(hwnd, SW_HIDE);
+    if (g_trayIconAdded) {
+        ::ShowWindow(hwnd, SW_HIDE);
+    } else if (!::IsIconic(hwnd)) {
+        // Keep a taskbar button as the way back when Explorer cannot supply
+        // an icon. WM_SIZE re-enters here, so do not minimise twice.
+        ::ShowWindow(hwnd, SW_MINIMIZE);
+    }
 
     // Nothing renders while the window is hidden, and rendering is what
     // normally flushes the configuration.
@@ -668,6 +677,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
         // Never shown at all, rather than shown and then hidden: a window that
         // flashes up during sign-in is the thing --minimized exists to avoid.
         addTrayIcon(hwnd);
+        if (!g_trayIconAdded)
+            ::ShowWindow(hwnd, SW_SHOWMINIMIZED);
         RV_INFO("starting hidden in the notification area");
     } else {
         ::ShowWindow(hwnd, SW_SHOWDEFAULT);
@@ -817,9 +828,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
         g_context->ClearRenderTargetView(g_renderTarget, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        // Vsync: the UI has nothing to gain from running faster than the
-        // display, and the audio threads are better off with the spare cycles.
-        g_swapChain->Present(1, 0);
+        // The window's message pump shares this thread. Never wait inside
+        // Present for DWM to release a buffer: that also blocks Close and tray
+        // commands. A busy compositor can skip a frame while input keeps flowing.
+        const HRESULT presented = g_swapChain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
+        static bool presentFailureLogged = false;
+        if (FAILED(presented) && presented != DXGI_ERROR_WAS_STILL_DRAWING) {
+            if (!presentFailureLogged)
+                RV_ERROR("could not present the window (0x%08lX)",
+                         static_cast<unsigned long>(presented));
+            presentFailureLogged = true;
+        } else {
+            presentFailureLogged = false;
+        }
+
+        // Non-blocking presentation needs its own frame cap. Input wakes the
+        // wait immediately; a full compositor queue must not spin on the GPU.
+        ::MsgWaitForMultipleObjectsEx(0, nullptr, 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
     // Read before the application goes: Setup cannot run while this process
