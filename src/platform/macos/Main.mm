@@ -10,6 +10,8 @@
 #include "platform/macos/RouteProbe.h"
 #include "gui/Theme.h"
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <memory>
@@ -37,6 +39,10 @@
     BOOL resumeAfterPermission_;
     int frames_;
     int smokeFrames_;
+    std::atomic<int> presentedFrames_;
+    std::atomic<double> firstPresentation_;
+    std::atomic<double> lastPresentation_;
+    std::chrono::steady_clock::time_point smokeStarted_;
 }
 - (void)tick:(NSTimer*)timer;
 - (void)show:(id)sender;
@@ -45,6 +51,7 @@
 - (void)quit:(id)sender;
 - (void)initializeProcessor;
 - (void)startRouteVerification;
+- (void)renderFrame:(MTKView*)view onscreen:(BOOL)onscreen;
 @end
 
 @implementation RVApplication
@@ -53,8 +60,12 @@
     rv::log::init();
     RV_INFO("RadioVoice %s starting on macOS", RV_VERSION);
     smoke_ = [[NSProcessInfo processInfo].arguments containsObject:@"--smoke-test"];
-    smokeFrames_ = 12;
-    if (const char* value = std::getenv("RADIOVOICE_SMOKE_FRAMES")) smokeFrames_ = std::max(12, std::atoi(value));
+    presentedFrames_.store(0);
+    firstPresentation_.store(0);
+    lastPresentation_.store(0);
+    smokeFrames_ = 120;
+    smokeStarted_ = std::chrono::steady_clock::now();
+    if (const char* value = std::getenv("RADIOVOICE_SMOKE_FRAMES")) smokeFrames_ = std::max(120, std::atoi(value));
     loadedConfig_ = rv::app::Config::load();
     const auto& config = loadedConfig_;
     device_ = MTLCreateSystemDefaultDevice();
@@ -165,20 +176,40 @@
             if (!window_.visible) [self show:nil];
         }
         if (status_) status_.button.toolTip = [NSString stringWithUTF8String:app_->trayTooltip().c_str()];
-        [self drawInMTKView:view_];
+        // MTKView.draw recycles the drawable after the delegate returns.
+        // Invoking the delegate directly repeatedly presents the same drawable.
+        if (window_.visible && !window_.miniaturized) [view_ draw];
+        else [self renderFrame:view_ onscreen:NO];
         if (routeProbe_) routeProbe_->tick();
-        if (smoke_ && ++frames_ >= smokeFrames_) { std::printf("macOS UI smoke test passed (%d frames)\n", frames_); [NSApp terminate:nil]; }
+        if (smoke_) {
+            ++frames_;
+            const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - smokeStarted_).count();
+            if (frames_ >= smokeFrames_ || elapsed > smokeFrames_ / 60.0 + 3.0) {
+                const int presented = presentedFrames_.load();
+                const double duration = lastPresentation_.load() - firstPresentation_.load();
+                const double fps = duration > 0 ? (presented - 1) / duration : 0;
+                const bool passed = presented >= smokeFrames_ * 3 / 4 && fps >= 30;
+                std::printf("macOS stationary-window presentation test %s: %d presented / %d ticks, %.1f FPS\n",
+                    passed ? "passed" : "FAILED", presented, frames_, fps);
+                [self applicationWillTerminate:[NSNotification notificationWithName:NSApplicationWillTerminateNotification object:NSApp]];
+                std::exit(passed ? EXIT_SUCCESS : EXIT_FAILURE);
+            }
+        }
         if (app_->wantsExit()) [NSApp terminate:nil];
     }
 }
 - (void)drawInMTKView:(MTKView*)view
+{
+    [self renderFrame:view onscreen:YES];
+}
+- (void)renderFrame:(MTKView*)view onscreen:(BOOL)onscreen
 {
     if (!initialized_ || !app_ || shuttingDown_) return;
     auto& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(view.bounds.size.width, view.bounds.size.height);
     const float scale = window_.backingScaleFactor;
     io.DisplayFramebufferScale = ImVec2(scale, scale);
-    MTLRenderPassDescriptor* pass = window_.visible && !window_.miniaturized ? view.currentRenderPassDescriptor : nil;
+    MTLRenderPassDescriptor* pass = onscreen ? view.currentRenderPassDescriptor : nil;
     if (!pass) {
         // Keep config saving, device recovery and plugin parameter delivery alive
         // while hidden. No GPU command buffer or drawable is needed for that.
@@ -190,14 +221,24 @@
     app_->setWindowSize(static_cast<int>(view.bounds.size.width), static_cast<int>(view.bounds.size.height));
     app_->render();
     ImGui::Render();
-    if (!window_.visible || window_.miniaturized || !pass.colorAttachments[0].texture) return;
+    if (!onscreen || !pass.colorAttachments[0].texture) return;
     id<MTLCommandBuffer> command = [queue_ commandBuffer];
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.04, 0.05, 0.06, 1);
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), command, encoder);
     [encoder endEncoding];
-    [command presentDrawable:view.currentDrawable];
+    id<CAMetalDrawable> drawable = view.currentDrawable;
+    if (smoke_) {
+        [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
+            const double time = shown.presentedTime;
+            double empty = 0;
+            firstPresentation_.compare_exchange_strong(empty, time);
+            lastPresentation_.store(time);
+            presentedFrames_.fetch_add(1);
+        }];
+    }
+    [command presentDrawable:drawable];
     [command commit];
 }
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size {}

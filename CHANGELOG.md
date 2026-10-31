@@ -9,6 +9,14 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.7.1] — 2026-10-31
+
+### Fixed
+
+- The macOS window now presents a fresh Metal drawable on every frame instead
+  of freezing between window movements. The UI smoke check measures actual
+  onscreen presentations with the window stationary, rather than timer ticks.
+
 ## [0.7.0] — 2026-10-31
 
 ### Added

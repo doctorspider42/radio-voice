@@ -55,7 +55,7 @@ and verifies the payload after mounting the final read-only image. See
 `installer/macos/README.md` for signing precedence and CI secrets.
 `ctest --test-dir build-macos --output-on-failure` checks Unicode, ARM denormal
 handling, RNNoise and real silent output callbacks (no microphone capture).
-`RadioVoice.app/Contents/MacOS/RadioVoice --smoke-test` renders a short UI run
+`RadioVoice.app/Contents/MacOS/RadioVoice --smoke-test` checks actual stationary-window Metal presentations
 using temporary settings and no microphone permission request.
 
 ## Build

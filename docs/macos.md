@@ -55,7 +55,10 @@ physical output three times, feeds silence, checks callback delivery, and ensure
 callbacks stop before their producer can be destroyed. It skips if no physical
 default output is available. It does not record the microphone.
 
-The UI smoke test opens the redesigned window, renders 12 frames and exits. It
+The UI smoke test opens the redesigned window and checks actual Metal drawable
+presentation over 120 stationary timer ticks. It requires at least 75% of those
+ticks to produce onscreen presentations at 30 FPS or more, then exits. A frozen
+window fails even when the UI timer itself is running. It
 uses a fresh temporary configuration, disables auto-start and does not request
 microphone access. `RADIOVOICE_SMOKE_FRAMES` can extend the run for visual
 inspection. `RADIOVOICE_DATA_DIR` overrides the normal settings directory for
