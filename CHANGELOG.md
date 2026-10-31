@@ -11,6 +11,18 @@ download the installer.
 
 ## [0.7.1] — 2026-10-31
 
+### Added
+
+- **RadioVoice for macOS.** The redesigned rack runs natively with CoreAudio,
+  Metal rendering, microphone permissions and a menu bar icon. Built-in effects,
+  VST3 hosting and an independent headphone monitor share the Windows signal
+  chain. Route the processed microphone to other apps through BlackHole 2ch.
+- **A universal Mac installer.** Drag RadioVoice to Applications from the branded
+  DMG. Apple Silicon and Intel binaries are included; the application and image
+  carry Developer ID signatures and stapled Apple notarization tickets.
+- **Windows and macOS release builds in CI.** Both installers are published
+  together after their builds pass. Mac images include SHA-256 checksums.
+
 ### Fixed
 
 - The macOS window now presents a fresh Metal drawable on every frame instead
