@@ -25,9 +25,19 @@ add_library(rv_imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp)
+if(APPLE)
+    target_sources(rv_imgui PRIVATE
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_osx.mm
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_metal.mm)
+    target_compile_options(rv_imgui PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    target_link_libraries(rv_imgui PUBLIC "-framework Cocoa" "-framework Metal" "-framework MetalKit" "-framework GameController")
+else()
+    target_sources(rv_imgui PRIVATE
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
+    target_link_libraries(rv_imgui PUBLIC d3d11 dxgi d3dcompiler dwmapi)
+endif()
 
 target_include_directories(rv_imgui SYSTEM PUBLIC
     ${imgui_SOURCE_DIR}
@@ -35,12 +45,11 @@ target_include_directories(rv_imgui SYSTEM PUBLIC
 
 target_compile_definitions(rv_imgui PUBLIC
     IMGUI_DEFINE_MATH_OPERATORS
-    IMGUI_DISABLE_OBSOLETE_FUNCTIONS
-    IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX)
+    IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+if(WIN32)
+    target_compile_definitions(rv_imgui PUBLIC IMGUI_IMPL_WIN32_DISABLE_GAMEPAD WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
 
-target_link_libraries(rv_imgui PUBLIC d3d11 dxgi d3dcompiler dwmapi)
 set_target_properties(rv_imgui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_library(rv::imgui ALIAS rv_imgui)
 
@@ -114,20 +123,36 @@ if(RV_ENABLE_VST3)
         # implements IDataExchangeHandler, an optional interface for bulk
         # plugin->host data transfer that an effect host does not need;
         # plugins asking for it simply get kNotImplemented.
-        list(FILTER _rv_vst3_src EXCLUDE REGEX
-            "(_mac|_linux|_ios)\\.(cpp|mm)$|/test|test\\.cpp$|main\\.cpp$|module_bundle|dataexchange")
+        if(APPLE)
+            list(FILTER _rv_vst3_src EXCLUDE REGEX
+                "(_win32|_linux|_ios)\\.(cpp|mm)$|/test|test\\.cpp$|main\\.cpp$|module_bundle|dataexchange")
+            file(GLOB _rv_vst3_mac
+                ${_rv_vst3_root}/base/source/*_mac.mm
+                ${_rv_vst3_root}/base/thread/source/*_mac.mm
+                ${_rv_vst3_root}/public.sdk/source/common/*_mac.mm
+                ${_rv_vst3_root}/public.sdk/source/vst/hosting/*_mac.mm)
+            list(APPEND _rv_vst3_src ${_rv_vst3_mac})
+        else()
+            list(FILTER _rv_vst3_src EXCLUDE REGEX
+                "(_mac|_linux|_ios)\\.(cpp|mm)$|/test|test\\.cpp$|main\\.cpp$|module_bundle|dataexchange")
+        endif()
 
         add_library(rv_vst3sdk STATIC ${_rv_vst3_src})
 
         target_include_directories(rv_vst3sdk SYSTEM PUBLIC ${_rv_vst3_root})
 
         target_compile_definitions(rv_vst3sdk PUBLIC
-            $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>
-            WIN32_LEAN_AND_MEAN
-            NOMINMAX
-            _WIN32_WINNT=0x0A00)
+            $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>)
+        if(WIN32)
+            target_compile_definitions(rv_vst3sdk PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+        endif()
 
-        target_link_libraries(rv_vst3sdk PUBLIC ole32 oleaut32 uuid shlwapi shell32)
+        if(APPLE)
+            target_compile_options(rv_vst3sdk PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+            target_link_libraries(rv_vst3sdk PUBLIC "-framework Cocoa" "-framework CoreFoundation")
+        else()
+            target_link_libraries(rv_vst3sdk PUBLIC ole32 oleaut32 uuid shlwapi shell32)
+        endif()
 
         set_target_properties(rv_vst3sdk PROPERTIES
             CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
@@ -254,7 +279,20 @@ if(RV_ENABLE_RNNOISE)
     # 384 units evaluated every 10 ms, which is affordable on AVX2 and much less
     # so on the plain SSE2 fallback - but a binary built for AVX2 outright would
     # simply not start on a machine without it.
+    set(_rv_rnnoise_x86 OFF)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|AMD64|amd64|i.86" OR WIN32)
+        set(_rv_rnnoise_x86 ON)
+    endif()
+    # The scalar implementation is portable across both slices of a universal
+    # binary. x86-only compiler options cannot be applied to the arm64 slice.
+    if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+        if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+            set(_rv_rnnoise_x86 ON)
+        else()
+            set(_rv_rnnoise_x86 OFF)
+        endif()
+    endif()
+    if(_rv_rnnoise_x86)
         target_sources(rv_rnnoise PRIVATE
             ${rnnoise_SOURCE_DIR}/src/x86/x86_dnn_map.c
             ${rnnoise_SOURCE_DIR}/src/x86/x86cpu.c

@@ -41,7 +41,14 @@ enum class BackendType : int {
     Wasapi = 0,     ///< Shared or exclusive mode, event driven.
     DirectSound,    ///< Legacy polled backend, widest device compatibility.
     Asio,           ///< Lowest latency; requires an ASIO driver.
+    CoreAudio,      ///< Native macOS audio devices, identified by device UID.
 };
+
+#ifdef __APPLE__
+inline constexpr BackendType kDefaultBackend = BackendType::CoreAudio;
+#else
+inline constexpr BackendType kDefaultBackend = BackendType::Wasapi;
+#endif
 
 enum class WasapiMode : int {
     Shared = 0,     ///< Coexists with other applications, resampled by the mixer.

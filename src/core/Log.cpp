@@ -2,7 +2,9 @@
 
 #include "core/Paths.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <chrono>
 #include <cstdarg>
@@ -43,7 +45,11 @@ const char* levelTag(Level l)
 
 std::FILE* openLogFile()
 {
+#ifdef _WIN32
     std::FILE* file = _wfopen(paths::logFile().c_str(), L"wb");
+#else
+    std::FILE* file = std::fopen(paths::logFile().c_str(), "wb");
+#endif
     if (file)
         std::fwrite("\xEF\xBB\xBF", 1, 3, file);
     return file;
@@ -109,7 +115,7 @@ void write(Level level, const char* fmt, ...)
         std::fflush(s.file);
     }
 
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(_WIN32)
     ::OutputDebugStringA(buffer);
     ::OutputDebugStringA("\n");
 #endif

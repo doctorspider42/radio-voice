@@ -2,7 +2,7 @@
 
 <p align="center"><strong>Your mic. Your sound.</strong></p>
 <p align="center">
-  Real-time microphone processing for Windows.<br>
+  Real-time microphone processing for Windows, with a macOS source-build preview.<br>
   Clean up the noise, shape your voice, and bring your own VST3 plugins.
 </p>
 
@@ -74,6 +74,44 @@ build.cmd
 
 Run `build\bin\RadioVoice.exe`. Build variants and packaging instructions are in
 the [setup guide](QUICKSTART.md) and [installer guide](installer/README.md).
+
+### macOS preview
+
+Requires **macOS 13+, Xcode Command Line Tools, CMake 3.24+, Ninja and Git**.
+Build on the Mac you want to run it on (Apple Silicon or Intel):
+
+```sh
+./build-macos.sh
+open build-macos/bin/RadioVoice.app
+```
+
+Install [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole#installation-instructions),
+select your microphone as **Input** and **BlackHole 2ch** as **Output**, then
+select **BlackHole 2ch** as the microphone in the receiving application. Enable
+**Monitor** and choose headphones for a separate listening output.
+
+Set the output device to **48,000 Hz** in Audio MIDI Setup for RNNoise. The
+CoreAudio backend uses each device's current native rate and buffer size without
+changing shared device settings; the engine bridges different input/output
+rates and clocks. Allow microphone access when macOS asks. If access was denied,
+enable RadioVoice in **System Settings → Privacy & Security → Microphone**.
+
+Settings and logs live in `~/Library/Application Support/RadioVoice/`. Native
+VST3 bundles are scanned from `~/Library/Audio/Plug-Ins/VST3` and
+`/Library/Audio/Plug-Ins/VST3`; Windows plugin binaries cannot be used. An arm64
+build needs arm64 or universal plugins. Large fixed-size plugin editors can be
+opened with **Pop out** when they do not fit inside the rack.
+
+A branded DMG installer is available from CI/release assets: open it and drag
+RadioVoice into Applications. Universal images contain Apple Silicon and Intel
+binaries. Images built without a Developer ID certificate are explicitly named
+`unsigned` and are development previews. Signed images are not notarized yet.
+
+Local builds use the pinned signing identity when configured, and otherwise an
+ad-hoc development signature. Automatic macOS updates and a bundled virtual
+driver are not included. Intel runtime behavior has not been verified on Intel
+hardware. See [macOS packaging](installer/macos/README.md) and
+[development notes](docs/macos.md) for details.
 
 ### Current limits
 

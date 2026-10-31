@@ -7,6 +7,10 @@ cmake_minimum_required(VERSION 3.24)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/VERSION RV_VERSION_FILE)
 string(STRIP "${RV_VERSION_FILE}" RV_VERSION_FILE)
 
+if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
 project(RadioVoice
     VERSION ${RV_VERSION_FILE}
     DESCRIPTION "Real-time microphone processor with VST3 plugin chain"
@@ -44,8 +48,15 @@ else()
     option(RV_ENABLE_ASIO "Build the ASIO backend (needs the ASIO SDK)" OFF)
 endif()
 
-if(NOT WIN32)
-    message(FATAL_ERROR "RadioVoice targets Windows only.")
+if(APPLE)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(RV_CODESIGN_IDENTITY "" CACHE STRING "macOS signing identity; empty uses the local pinned preference")
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 20)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+    set(RV_ENABLE_ASIO OFF)
+elseif(NOT WIN32)
+    message(FATAL_ERROR "RadioVoice supports Windows and macOS.")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -66,6 +77,7 @@ include(cmake/Dependencies.cmake)
 file(GLOB_RECURSE RV_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h)
+list(FILTER RV_SOURCES EXCLUDE REGEX "/platform/macos/")
 
 # VST3-dependent translation units guard themselves with `#if RV_HAS_VST3`
 # rather than being excluded here, so that the application still builds - just
@@ -74,7 +86,28 @@ if(NOT RV_ENABLE_ASIO)
     list(FILTER RV_SOURCES EXCLUDE REGEX "Asio")
 endif()
 
-add_executable(RadioVoice WIN32 ${RV_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/res/app.rc)
+if(APPLE)
+    list(FILTER RV_SOURCES EXCLUDE REGEX
+        "/(main|audio/(WasapiStream|WasapiCommon|DirectSoundStream|DeviceEnumerator)|core/(Paths|Autostart|Updater)|host/vst3/Vst3Editor)\\.cpp$")
+    file(GLOB RV_MAC_SOURCES CONFIGURE_DEPENDS src/platform/macos/*.mm src/platform/macos/*.cpp src/platform/macos/*.h)
+    add_executable(RadioVoice MACOSX_BUNDLE ${RV_SOURCES} ${RV_MAC_SOURCES} res/RadioVoice.icns)
+    set_source_files_properties(res/RadioVoice.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(RadioVoice PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/res/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.radiovoice.app"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+    set_property(TARGET RadioVoice APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/res/RadioVoice.icns"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos_signing.py")
+    add_custom_command(TARGET RadioVoice POST_BUILD
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos_signing.py"
+            "$<TARGET_BUNDLE_DIR:RadioVoice>" "--identity=${RV_CODESIGN_IDENTITY}" --allow-adhoc
+        COMMENT "Signing the macOS app bundle"
+        VERBATIM)
+else()
+    add_executable(RadioVoice WIN32 ${RV_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/res/app.rc)
+endif()
 
 # The .rc is left in the source tree rather than generated, so that its relative
 # references to app.manifest and the icon keep resolving; only the version
@@ -87,26 +120,34 @@ target_include_directories(RadioVoice PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/res    # so the .rc can find app.manifest
     ${CMAKE_BINARY_DIR}/generated)     # ... and the generated rv_version.h
 
-target_compile_definitions(RadioVoice PRIVATE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    UNICODE
-    _UNICODE
-    _WIN32_WINNT=0x0A00
-    NTDDI_VERSION=0x0A000000
-    RV_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(RadioVoice PRIVATE RV_VERSION="${PROJECT_VERSION}")
 
-target_link_libraries(RadioVoice PRIVATE
-    rv::imgui
-    rv::json
-    ole32 oleaut32 uuid propsys
-    winmm avrt
-    dsound dxguid
-    d3d11 dxgi d3dcompiler
-    shlwapi shell32 dwmapi comdlg32 user32 gdi32
-    # The updater: WinHTTP fetches the release list and the installer, bcrypt
-    # checks the SHA-256 GitHub publishes alongside it. Both ship with Windows.
-    winhttp bcrypt)
+if(WIN32)
+    target_compile_definitions(RadioVoice PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        UNICODE
+        _UNICODE
+        _WIN32_WINNT=0x0A00
+        NTDDI_VERSION=0x0A000000)
+
+    target_link_libraries(RadioVoice PRIVATE
+        rv::imgui
+        rv::json
+        ole32 oleaut32 uuid propsys
+        winmm avrt
+        dsound dxguid
+        d3d11 dxgi d3dcompiler
+        shlwapi shell32 dwmapi comdlg32 user32 gdi32
+        # The updater: WinHTTP fetches the release list and the installer, bcrypt
+        # checks the SHA-256 GitHub publishes alongside it. Both ship with Windows.
+        winhttp bcrypt)
+else()
+    target_link_libraries(RadioVoice PRIVATE rv::imgui rv::json
+        "-framework Cocoa" "-framework Metal" "-framework MetalKit" "-framework QuartzCore"
+        "-framework CoreAudio" "-framework AudioToolbox" "-framework AVFoundation"
+        "-framework ServiceManagement")
+endif()
 
 if(TARGET rv::vst3sdk)
     target_link_libraries(RadioVoice PRIVATE rv::vst3sdk)
@@ -155,14 +196,16 @@ else()
     # compiled it that DLL is on PATH beside the compiler, so nothing looks
     # wrong; installed anywhere else the process dies before main with
     # 0xc0000142, which names neither the DLL nor the reason.
-    target_link_options(RadioVoice PRIVATE
-        -municode -static -static-libgcc -static-libstdc++ -Wl,--gc-sections)
+    if(WIN32)
+        target_link_options(RadioVoice PRIVATE
+            -municode -static -static-libgcc -static-libstdc++ -Wl,--gc-sections)
 
-    # A plain Release build is what gets handed to someone else, so the symbol
-    # table goes too. Use the reldbg preset when a stack trace matters more
-    # than the file size.
-    target_link_options(RadioVoice PRIVATE $<$<CONFIG:Release>:-s>)
-    target_compile_options(RadioVoice PRIVATE -ffunction-sections -fdata-sections)
+        # A plain Release build is what gets handed to someone else, so the symbol
+        # table goes too. Use the reldbg preset when a stack trace matters more
+        # than the file size.
+        target_link_options(RadioVoice PRIVATE $<$<CONFIG:Release>:-s>)
+        target_compile_options(RadioVoice PRIVATE -ffunction-sections -fdata-sections)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -183,3 +226,26 @@ else()
     message(STATUS "  ASIO       : disabled (set RV_ENABLE_ASIO=ON and RV_ASIO_SDK_DIR)")
 endif()
 message(STATUS "")
+
+include(CTest)
+if(APPLE AND BUILD_TESTING)
+    add_executable(rv_macos_audio_tests
+        tests/MacAudioTests.cpp
+        src/platform/macos/CoreAudioStream.cpp
+        src/platform/macos/DeviceEnumerator.cpp
+        src/platform/macos/Platform.mm
+        src/core/Log.cpp src/core/Strings.cpp src/core/Types.cpp
+        src/dsp/NoiseSuppressor.cpp)
+    target_include_directories(rv_macos_audio_tests PRIVATE src)
+    target_link_libraries(rv_macos_audio_tests PRIVATE
+        "-framework CoreAudio" "-framework AudioToolbox" "-framework Cocoa" "-framework ServiceManagement")
+    if(TARGET rv::rnnoise)
+        target_link_libraries(rv_macos_audio_tests PRIVATE rv::rnnoise)
+        target_compile_definitions(rv_macos_audio_tests PRIVATE RV_HAS_RNNOISE=1)
+    else()
+        target_compile_definitions(rv_macos_audio_tests PRIVATE RV_HAS_RNNOISE=0)
+    endif()
+    add_test(NAME macos_audio_portability COMMAND rv_macos_audio_tests)
+    add_test(NAME macos_audio_playback COMMAND rv_macos_audio_tests --playback)
+    set_tests_properties(macos_audio_playback PROPERTIES SKIP_RETURN_CODE 77 LABELS hardware)
+endif()

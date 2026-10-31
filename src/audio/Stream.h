@@ -9,7 +9,7 @@ namespace rv::audio {
 
 struct StreamConfig {
     DeviceId    deviceId;
-    BackendType backend    = BackendType::Wasapi;
+    BackendType backend    = kDefaultBackend;
     WasapiMode  wasapiMode = WasapiMode::Shared;
 
     double sampleRate = 48000.0;

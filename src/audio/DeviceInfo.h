@@ -10,7 +10,7 @@ namespace rv::audio {
 struct DeviceInfo {
     DeviceId    id;                 ///< Backend-specific, stable across restarts.
     std::string name;               ///< Friendly name for the UI.
-    BackendType backend = BackendType::Wasapi;
+    BackendType backend = kDefaultBackend;
 
     bool isInput   = false;
     bool isOutput  = false;

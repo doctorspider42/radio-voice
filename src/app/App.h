@@ -35,7 +35,7 @@ public:
     /// configuration the platform layer already read to size the window, passed
     /// in rather than read again so the file is parsed exactly once.
     bool initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
-                    Config loaded);
+                    Config loaded, bool allowAutoStart = true);
 
     /// Called when the window moves to a display of a different scale. The
     /// fonts have already been rebuilt by the platform layer; this adopts them
@@ -68,6 +68,10 @@ public:
     bool isMuted() const { return params_.mute.load(); }
     void setMuted(bool muted) { params_.mute.store(muted); markDirty(); }
 
+    // Read-only telemetry for the opt-in macOS loopback verification.
+    std::string outputDeviceId() const { return engine_ ? engine_->config().output.deviceId : std::string{}; }
+    float microphoneRms() const { return meters_.inputRms.load(); }
+    float processedRms() const { return meters_.outputRms.load(); }
     bool isEngineRunning() const { return engine_ && engine_->isRunning(); }
     void toggleEngine();
 

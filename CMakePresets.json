@@ -1,6 +1,10 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "mingw",
@@ -18,14 +22,18 @@
       "inherits": "mingw",
       "displayName": "MinGW-w64, Release with debug symbols",
       "binaryDir": "${sourceDir}/build-reldbg",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
     },
     {
       "name": "mingw-debug",
       "inherits": "mingw",
       "displayName": "MinGW-w64, Debug",
       "binaryDir": "${sourceDir}/build-debug",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     },
     {
       "name": "msvc",
@@ -39,14 +47,51 @@
       "inherits": "mingw",
       "displayName": "MinGW-w64, VST3 host disabled (no copyleft dependency)",
       "binaryDir": "${sourceDir}/build-novst3",
-      "cacheVariables": { "RV_ENABLE_VST3": "OFF" }
+      "cacheVariables": {
+        "RV_ENABLE_VST3": "OFF"
+      }
+    },
+    {
+      "name": "macos",
+      "displayName": "macOS native, Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "mingw", "configurePreset": "mingw" },
-    { "name": "mingw-reldbg", "configurePreset": "mingw-reldbg" },
-    { "name": "mingw-debug", "configurePreset": "mingw-debug" },
-    { "name": "msvc", "configurePreset": "msvc", "configuration": "RelWithDebInfo" },
-    { "name": "no-vst3", "configurePreset": "no-vst3" }
+    {
+      "name": "mingw",
+      "configurePreset": "mingw"
+    },
+    {
+      "name": "mingw-reldbg",
+      "configurePreset": "mingw-reldbg"
+    },
+    {
+      "name": "mingw-debug",
+      "configurePreset": "mingw-debug"
+    },
+    {
+      "name": "msvc",
+      "configurePreset": "msvc",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "no-vst3",
+      "configurePreset": "no-vst3"
+    },
+    {
+      "name": "macos",
+      "configurePreset": "macos"
+    }
   ]
 }

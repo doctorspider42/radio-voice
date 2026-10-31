@@ -34,3 +34,8 @@ driver/Release/
 *.pvk
 *.cer
 *.p7b
+
+# Local signing identity preferences; private keys remain in Keychain.
+.radiovoice-signing.json
+*.p12
+__pycache__/
