@@ -78,7 +78,8 @@ use the exact same certificate rather than generating a new identity per run.
 
 The workflow imports the certificate into a temporary Keychain restricted to
 codesign, signs the app and DMG, and removes the temporary Keychain afterwards.
-Credentials are not printed. Supplying these secrets shares signing capability
+Signing secrets are exposed only to main builds, never branch previews or pull
+requests. Credentials are not printed. Supplying these secrets shares signing capability
 with that repository's CI; configuring the workflow does not export or upload
 local keys. Fork pull requests receive no secrets.
 

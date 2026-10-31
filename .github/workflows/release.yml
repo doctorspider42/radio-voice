@@ -171,8 +171,8 @@ jobs:
       - name: Configure signing
         id: signing
         env:
-          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          CERTIFICATE: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12_BASE64 || '' }}
+          CERTIFICATE_PASSWORD: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
           EXPECTED_IDENTITY: ${{ vars.MACOS_CODESIGN_IDENTITY }}
         run: |
           if [ -z "$CERTIFICATE" ]; then
