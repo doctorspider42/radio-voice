@@ -15,7 +15,8 @@ download the installer.
 
 - A branded macOS disk image: drag RadioVoice to Applications to install. The
   application and image are signed with a configured permanent Developer ID;
-  local packaging can reuse Zitter's pinned identity.
+  local packaging can reuse Zitter's pinned identity. Notarization with an App
+  Store Connect API key staples Apple tickets to both the app and the DMG.
 - Universal macOS binaries (Apple Silicon and Intel), built in CI alongside the
   Windows installer, with SHA-256 checksums. CI images made without a configured
   signing certificate are explicitly marked unsigned development previews.

@@ -24,8 +24,33 @@ def architectures(app):
     raise ValueError('Unsupported application architectures: ' + result.strip())
 
 
-def package(app, output, identity):
+def notarize(archive):
+    key = os.environ.get('MACOS_NOTARY_KEY_PATH')
+    key_id = os.environ.get('MACOS_NOTARY_KEY_ID')
+    issuer = os.environ.get('MACOS_NOTARY_ISSUER_ID')
+    if not key or not key_id:
+        raise ValueError('Notarization requires MACOS_NOTARY_KEY_PATH and MACOS_NOTARY_KEY_ID.')
+    auth = ['--key', key, '--key-id', key_id]
+    if issuer:
+        auth += ['--issuer', issuer]
+    result = subprocess.run(['xcrun', 'notarytool', 'submit', str(archive), *auth,
+        '--wait', '--timeout', '30m', '--output-format', 'json'], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError('Apple notarization failed: ' + result.stderr.strip())
+    response = json.loads(result.stdout)
+    if response.get('status') != 'Accepted':
+        log = subprocess.run(['xcrun', 'notarytool', 'log', response['id'], *auth], capture_output=True, text=True)
+        log_path = ROOT / 'dist' / ('notarization-' + response['id'] + '.json')
+        log_path.parent.mkdir(exist_ok=True)
+        log_path.write_text(log.stdout or log.stderr)
+        raise RuntimeError('Apple rejected notarization; see ' + str(log_path))
+    print('Apple notarization accepted: ' + response['id'], flush=True)
+
+
+def package(app, output, identity, notarization=False):
     import dmgbuild
+    if notarization and identity == '-':
+        raise ValueError('Notarization requires a permanent Developer ID signature.')
     app = app.resolve()
     version = (ROOT / 'VERSION').read_text().strip()
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
@@ -49,6 +74,12 @@ def package(app, output, identity):
         for name in ('LICENSE', 'NOTICE.md'):
             shutil.copy2(ROOT / name, resources / name)
         sign_app(staged_app, identity)
+        if notarization:
+            archive = stage / 'RadioVoice.zip'
+            subprocess.run(['/usr/bin/ditto', '-c', '-k', '--keepParent', str(staged_app), str(archive)], check=True)
+            notarize(archive)
+            subprocess.run(['xcrun', 'stapler', 'staple', str(staged_app)], check=True)
+            subprocess.run(['xcrun', 'stapler', 'validate', str(staged_app)], check=True)
         dmg = stage / filename
         dmgbuild.build_dmg(str(dmg), 'RadioVoice', settings={
             'format': 'UDZO', 'filesystem': 'HFS+',
@@ -66,6 +97,10 @@ def package(app, output, identity):
         if identity != '-':
             sign(dmg, identity, 'com.radiovoice.diskimage')
             subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(dmg)], check=True)
+        if notarization:
+            notarize(dmg)
+            subprocess.run(['xcrun', 'stapler', 'staple', str(dmg)], check=True)
+            subprocess.run(['xcrun', 'stapler', 'validate', str(dmg)], check=True)
         subprocess.run(['/usr/bin/hdiutil', 'verify', str(dmg)], check=True)
         # Finder metadata written while assembling a DMG can invalidate a valid
         # app signature. Verify the actual read-only payload, not only staging.
@@ -83,7 +118,7 @@ def package(app, output, identity):
         os.replace(dmg, target)
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
     (output / (filename + '.sha256')).write_text(f'{digest}  {filename}\n')
-    print(json.dumps({'dmg': str(target), 'architecture': arch, 'signed': identity != '-', 'sha256': digest}, indent=2))
+    print(json.dumps({'dmg': str(target), 'architecture': arch, 'signed': identity != '-', 'notarized': notarization, 'sha256': digest}, indent=2))
     return target
 
 
@@ -94,9 +129,10 @@ def main():
     signing = parser.add_mutually_exclusive_group()
     signing.add_argument('--identity')
     signing.add_argument('--unsigned', action='store_true', help='Explicit ad-hoc development image, marked unsigned in its filename')
+    parser.add_argument('--notarize', action='store_true', help='Submit to Apple and staple tickets to both app and DMG')
     args = parser.parse_args()
     identity = '-' if args.unsigned else resolve_identity(args.identity)
-    package(args.app, args.output.resolve(), identity)
+    package(args.app, args.output.resolve(), identity, notarization=args.notarize)
 
 
 if __name__ == '__main__':

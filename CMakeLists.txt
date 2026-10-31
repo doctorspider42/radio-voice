@@ -99,7 +99,8 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
     set_property(TARGET RadioVoice APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/res/RadioVoice.icns"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos_signing.py")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos_signing.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/res/macos-entitlements.plist")
     add_custom_command(TARGET RadioVoice POST_BUILD
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos_signing.py"
             "$<TARGET_BUNDLE_DIR:RadioVoice>" "--identity=${RV_CODESIGN_IDENTITY}" --allow-adhoc

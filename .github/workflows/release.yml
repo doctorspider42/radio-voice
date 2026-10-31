@@ -15,6 +15,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: 'Use signing/notarization credentials for this manually approved branch build'
+        type: boolean
+        default: false
 
 concurrency:
   group: radiovoice-${{ github.ref }}
@@ -175,8 +180,8 @@ jobs:
       - name: Configure signing
         id: signing
         env:
-          CERTIFICATE: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12_BASE64 || '' }}
-          CERTIFICATE_PASSWORD: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+          CERTIFICATE: ${{ (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.sign_macos)) && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12_BASE64 || '' }}
+          CERTIFICATE_PASSWORD: ${{ (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.sign_macos)) && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
           EXPECTED_IDENTITY: ${{ vars.MACOS_CODESIGN_IDENTITY }}
         run: |
           if [ -z "$CERTIFICATE" ]; then
@@ -212,7 +217,7 @@ jobs:
         run: |
           cmake --preset macos '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' "-DRV_CODESIGN_IDENTITY=$SIGNING_IDENTITY"
           cmake --build --preset macos --parallel 3
-          lipo build-macos/bin/RadioVoice.app/Contents/MacOS/RadioVoice -verify_arch arm64 x86_64
+          python -c 'import sys; sys.path.insert(0, "tools"); from pathlib import Path; from package_macos import architectures; assert architectures(Path("build-macos/bin/RadioVoice.app")) == "universal"'
 
       - name: Verify portable audio and packaging logic
         run: |
@@ -223,9 +228,18 @@ jobs:
         env:
           SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
           SIGNED: ${{ steps.signing.outputs.signed }}
+          NOTARY_KEY: ${{ steps.signing.outputs.signed == 'true' && secrets.MACOS_NOTARY_KEY_P8 || '' }}
+          MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ steps.signing.outputs.signed == 'true' && secrets.MACOS_NOTARY_ISSUER_ID || '' }}
         run: |
           if [ "$SIGNED" = true ]; then
-            python tools/package_macos.py --identity "$SIGNING_IDENTITY"
+            if [ -n "$NOTARY_KEY" ]; then
+              export MACOS_NOTARY_KEY_PATH="$RUNNER_TEMP/notary-key.p8"
+              (umask 077; printf '%s' "$NOTARY_KEY" > "$MACOS_NOTARY_KEY_PATH")
+              python tools/package_macos.py --identity "$SIGNING_IDENTITY" --notarize
+            else
+              python tools/package_macos.py --identity "$SIGNING_IDENTITY"
+            fi
           else
             python tools/package_macos.py --unsigned
           fi
@@ -243,7 +257,7 @@ jobs:
         if: always()
         run: |
           if [ -n "${RV_CI_KEYCHAIN:-}" ]; then security delete-keychain "$RV_CI_KEYCHAIN"; fi
-          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/notary-key.p8"
 
   publish:
     name: Publish Windows and macOS

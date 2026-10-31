@@ -74,8 +74,8 @@ isolated development runs.
 - Fixed-size editors are kept at their native size; use Pop out if they do not
   fit. Resizable editors negotiate a fitting size with the plugin.
 - Automatic updates are manual on macOS; the Windows updater is excluded from
-  the Mac target. Signed universal DMGs are available, but notarization is not
-  configured yet. A Developer ID signature alone is not a notarization ticket.
+  the Mac target. Universal DMGs support Developer ID signing and Apple
+  notarization; both app and image receive stapled tickets when enabled.
 - Login items use macOS ServiceManagement. Registration can depend on the local
   bundle's signing/installation status; failures are reported in the log. Test
   from a stable location such as Applications before enabling start at login.

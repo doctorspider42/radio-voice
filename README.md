@@ -105,7 +105,8 @@ opened with **Pop out** when they do not fit inside the rack.
 A branded DMG installer is available from CI/release assets: open it and drag
 RadioVoice into Applications. Universal images contain Apple Silicon and Intel
 binaries. Images built without a Developer ID certificate are explicitly named
-`unsigned` and are development previews. Signed images are not notarized yet.
+`unsigned` and are development previews. With the signing and App Store Connect
+credentials configured, release images are signed, notarized and stapled.
 
 Local builds use the pinned signing identity when configured, and otherwise an
 ad-hoc development signature. Automatic macOS updates and a bundled virtual

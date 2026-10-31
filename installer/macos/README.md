@@ -42,10 +42,18 @@ Unconfigured development builds may use ad-hoc signing. Distribution packaging
 requires an identity unless `--unsigned` is explicitly supplied; those images are
 named `*-unsigned.dmg` and are not represented as Developer ID-signed releases.
 
-Signing currently matches Zitter: permanent Developer ID + secure timestamp.
-Notarization is separate and not configured. A signed DMG is not a notarized app,
-and Gatekeeper can still require notarization on other Macs. No global Gatekeeper
-bypass is part of the installer.
+Signing uses the same permanent Developer ID as Zitter, with a secure timestamp.
+The app also enables Hardened Runtime for notarization, with microphone access
+and the library-validation exception required to load other vendors' VST3 effects.
+No global Gatekeeper bypass is part of the installer.
+
+To notarize, set `MACOS_NOTARY_KEY_PATH` to the App Store Connect `.p8` file,
+`MACOS_NOTARY_KEY_ID` to its Key ID, and `MACOS_NOTARY_ISSUER_ID` to its team
+Issuer ID (omit issuer for an individual API key). Add `--notarize` to the
+packaging command. The packager submits a signed app ZIP, staples the accepted
+app ticket, creates/signs the DMG, submits it and staples the image ticket.
+Any rejection or timeout fails packaging; the previous installer is preserved.
+Rejection logs are retained under `dist/notarization-<submission-id>.json`.
 
 To regenerate artwork from the existing icon source and layout code:
 
@@ -72,14 +80,24 @@ For permanent CI signing configure these repository Actions secrets:
   including its private key, exported as a password-protected PKCS#12 and Base64.
 - `MACOS_CERTIFICATE_PASSWORD`: that PKCS#12 password.
 
+For Apple notarization also configure:
+
+- Secret `MACOS_NOTARY_KEY_P8`: the App Store Connect API private key contents.
+- Variable `MACOS_NOTARY_KEY_ID`: the corresponding API Key ID.
+- Secret `MACOS_NOTARY_ISSUER_ID`: the team Issuer ID (omit for individual keys).
+
+When the notary key is present, signed CI builds require notarization and attach
+both tickets before uploading artifacts. Supplying a bad key fails the build.
+
 Optionally pin the expected certificate SHA-1 with the repository Actions variable
 `MACOS_CODESIGN_IDENTITY`. It must match the imported identity. To match Zitter,
 use the exact same certificate rather than generating a new identity per run.
 
 The workflow imports the certificate into a temporary Keychain restricted to
 codesign, signs the app and DMG, and removes the temporary Keychain afterwards.
-Signing secrets are exposed only to main builds, never branch previews or pull
-requests. Credentials are not printed. Supplying these secrets shares signing capability
+Signing secrets are exposed only to main builds or a maintainer's manual run
+with the `sign_macos` input explicitly enabled, never pull requests or ordinary
+branch previews. Credentials are not printed. Supplying these secrets shares signing capability
 with that repository's CI; configuring the workflow does not export or upload
 local keys. Fork pull requests receive no secrets.
 

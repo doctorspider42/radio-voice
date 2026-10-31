@@ -28,10 +28,12 @@ def resolve_identity(explicit=None, allow_adhoc=False):
     return identity
 
 
-def sign(path, identity, identifier=None):
+def sign(path, identity, identifier=None, runtime=False):
     command = ['/usr/bin/codesign', '--force', '--sign', identity]
     if identity != '-':
         command += ['--timestamp']
+        if runtime:
+            command += ['--options', 'runtime', '--entitlements', str(ROOT / 'res/macos-entitlements.plist')]
     if identifier:
         command += ['--identifier', identifier]
     subprocess.run(command + [str(path)], check=True)
@@ -47,7 +49,7 @@ def sign_app(app, identity):
     # unexpected code rather than using --deep and sealing it accidentally.
     if (app / 'Contents/Frameworks').exists() or (app / 'Contents/PlugIns').exists():
         raise ValueError('Nested code needs explicit inside-out signing before distribution.')
-    sign(app, identity, 'com.radiovoice.app')
+    sign(app, identity, 'com.radiovoice.app', runtime=True)
     subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)], check=True)
 
 
