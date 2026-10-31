@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
+import macos_installer
 import macos_signing
 import package_macos
 from release_notes import release_notes
@@ -66,6 +67,32 @@ class SigningTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     package_macos.notarize(Path(temp) / 'RadioVoice.zip')
                 self.assertTrue((Path(temp) / 'dist/notarization-test-submission.json').exists())
+
+    def test_installer_requires_a_real_installer_identity(self):
+        fingerprint = 'A' * 40
+        listing = '1) ' + fingerprint + ' "Developer ID Application: Test (TEAM)"\n'
+        with patch.dict('os.environ', {}, clear=True), patch.object(macos_installer.subprocess, 'check_output', return_value=listing):
+            with self.assertRaises(ValueError):
+                macos_installer.resolve_installer_identity(fingerprint)
+        listing += '2) ' + 'B' * 40 + ' "Developer ID Installer: Test (TEAM)"\n'
+        with patch.dict('os.environ', {}, clear=True), patch.object(macos_installer.subprocess, 'check_output', return_value=listing):
+            self.assertEqual('B' * 40, macos_installer.resolve_installer_identity())
+            with self.assertRaises(ValueError):
+                macos_installer.resolve_installer_identity(fingerprint)
+            with patch.dict('os.environ', {'RADIOVOICE_INSTALLER_IDENTITY': 'B' * 40}):
+                self.assertEqual('B' * 40, macos_installer.resolve_installer_identity())
+
+    def test_multiple_installer_identities_require_explicit_selection(self):
+        listing = '\n'.join(f'{letter * 40} "Developer ID Installer: {letter} (TEAM)"' for letter in 'AB')
+        with patch.dict('os.environ', {}, clear=True), patch.object(macos_installer.subprocess, 'check_output', return_value=listing):
+            with self.assertRaises(ValueError):
+                macos_installer.resolve_installer_identity()
+            self.assertEqual('B' * 40, macos_installer.resolve_installer_identity('B' * 40))
+
+    def test_unsigned_installer_cannot_be_notarized(self):
+        with self.assertRaisesRegex(ValueError, 'Developer ID Installer'):
+            package_macos.package(Path('/unused'), Path('/unused'), 'application-certificate',
+                notarization=True, unsigned_installer=True)
 
     def test_notes_stop_at_the_next_version_and_reject_missing_version(self):
         notes = '# Changelog\n## [1.2.3] — Today\n\nNew installer.\n\n## [1.2.2]\nOld notes.'

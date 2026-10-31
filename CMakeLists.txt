@@ -87,6 +87,20 @@ if(NOT RV_ENABLE_ASIO)
 endif()
 
 if(APPLE)
+    set(RV_DRIVER_ARCHS "${CMAKE_OSX_ARCHITECTURES}")
+    if(NOT RV_DRIVER_ARCHS)
+        set(RV_DRIVER_ARCHS "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    set(RV_DRIVER_BUNDLE "${CMAKE_BINARY_DIR}/driver/RadioVoice.driver")
+    add_custom_command(OUTPUT "${RV_DRIVER_BUNDLE}/Contents/MacOS/RadioVoiceDriver"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_macos_driver.py"
+            --output "${RV_DRIVER_BUNDLE}" --archs "${RV_DRIVER_ARCHS}"
+        DEPENDS tools/build_macos_driver.py tools/macos_signing.py
+            driver/macos/upstream/BlackHole.c driver/macos/Identity.h
+            driver/macos/RadioVoiceConfig.h driver/macos/README.md
+            driver/macos/upstream/LICENSE VERSION res/RadioVoice.icns
+        COMMENT "Building the RadioVoice virtual microphone" VERBATIM)
+    add_custom_target(rv_macos_driver ALL DEPENDS "${RV_DRIVER_BUNDLE}/Contents/MacOS/RadioVoiceDriver")
     list(FILTER RV_SOURCES EXCLUDE REGEX
         "/(main|audio/(WasapiStream|WasapiCommon|DirectSoundStream|DeviceEnumerator)|core/(Paths|Autostart|Updater)|host/vst3/Vst3Editor)\\.cpp$")
     file(GLOB RV_MAC_SOURCES CONFIGURE_DEPENDS src/platform/macos/*.mm src/platform/macos/*.cpp src/platform/macos/*.h)
@@ -117,6 +131,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/res/rv_version.h.in
                ${CMAKE_BINARY_DIR}/generated/rv_version.h @ONLY)
 
 target_include_directories(RadioVoice PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/driver/macos
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/res    # so the .rc can find app.manifest
     ${CMAKE_BINARY_DIR}/generated)     # ... and the generated rv_version.h
@@ -237,7 +252,7 @@ if(APPLE AND BUILD_TESTING)
         src/platform/macos/Platform.mm
         src/core/Log.cpp src/core/Strings.cpp src/core/Types.cpp
         src/dsp/NoiseSuppressor.cpp)
-    target_include_directories(rv_macos_audio_tests PRIVATE src)
+    target_include_directories(rv_macos_audio_tests PRIVATE src driver/macos)
     target_link_libraries(rv_macos_audio_tests PRIVATE
         "-framework CoreAudio" "-framework AudioToolbox" "-framework Cocoa" "-framework ServiceManagement")
     if(TARGET rv::rnnoise)
@@ -249,4 +264,13 @@ if(APPLE AND BUILD_TESTING)
     add_test(NAME macos_audio_portability COMMAND rv_macos_audio_tests)
     add_test(NAME macos_audio_playback COMMAND rv_macos_audio_tests --playback)
     set_tests_properties(macos_audio_playback PROPERTIES SKIP_RETURN_CODE 77 LABELS hardware)
+endif()
+
+if(APPLE AND BUILD_TESTING)
+    add_executable(rv_macos_driver_tests tests/macos_driver.cpp)
+    target_include_directories(rv_macos_driver_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/driver/macos)
+    target_link_libraries(rv_macos_driver_tests PRIVATE "-framework CoreAudio" "-framework CoreFoundation")
+    add_dependencies(rv_macos_driver_tests rv_macos_driver)
+    add_test(NAME macos_virtual_microphone COMMAND rv_macos_driver_tests
+        "${RV_DRIVER_BUNDLE}/Contents/MacOS/RadioVoiceDriver")
 endif()

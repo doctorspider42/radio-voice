@@ -85,10 +85,13 @@ Build on the Mac you want to run it on (Apple Silicon or Intel):
 open build-macos/bin/RadioVoice.app
 ```
 
-Install [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole#installation-instructions),
-select your microphone as **Input** and **BlackHole 2ch** as **Output**, then
-select **BlackHole 2ch** as the microphone in the receiving application. Enable
-**Monitor** and choose headphones for a separate listening output.
+The macOS DMG contains one **RadioVoice.pkg** installer for the application and
+its virtual microphone. Run it, then select your microphone as **Input** in
+RadioVoice. The app selects its hidden **RadioVoice Send** output automatically.
+In Discord, OBS or Teams, select **RadioVoice** as the microphone. Installation
+requires administrator authorization and briefly restarts system audio.
+Existing BlackHole installations are preserved. Enable Monitor to listen through
+headphones.
 
 Set the output device to **48,000 Hz** in Audio MIDI Setup for RNNoise. The
 CoreAudio backend uses each device's current native rate and buffer size without
@@ -102,15 +105,14 @@ VST3 bundles are scanned from `~/Library/Audio/Plug-Ins/VST3` and
 build needs arm64 or universal plugins. Large fixed-size plugin editors can be
 opened with **Pop out** when they do not fit inside the rack.
 
-A branded DMG installer is available from CI/release assets: open it and drag
-RadioVoice into Applications. Universal images contain Apple Silicon and Intel
+A branded DMG installer is available from CI/release assets: open it and run
+RadioVoice.pkg to install both components. Universal images contain Apple Silicon and Intel
 binaries. Images built without a Developer ID certificate are explicitly named
 `unsigned` and are development previews. With the signing and App Store Connect
 credentials configured, release images are signed, notarized and stapled.
 
 Local builds use the pinned signing identity when configured, and otherwise an
-ad-hoc development signature. Automatic macOS updates and a bundled virtual
-driver are not included. Intel runtime behavior has not been verified on Intel
+ad-hoc development signature. Automatic macOS updates are not included. Intel runtime behavior has not been verified on Intel
 hardware. See [macOS packaging](installer/macos/README.md) and
 [development notes](docs/macos.md) for details.
 

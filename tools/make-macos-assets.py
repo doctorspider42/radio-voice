@@ -40,16 +40,14 @@ def background(scale):
     text(360,115,'Your mic. Your sound.',32,(239,244,247),True,True)
     text(360,160,'A studio voice, in every app.',15,(151,166,181),center=True)
     # The two wells leave room for Finder's real icons and filenames.
-    for x in (190,530):
+    for x in (360,):
         box((x-90,209,x+90,351),(30,38,47),(51,72,80),24)
         # Finder uses black filename labels for image backgrounds, regardless
         # of system appearance. Give those labels their own light nameplates.
         box((x-79,329,x+79,353),(213,229,231),radius=7)
         draw.line((int((x-59)*scale),int(353*scale),int((x+59)*scale),int(353*scale)), fill=accent,width=2*scale)
-    draw.line((317*scale,269*scale,399*scale,269*scale), fill=accent,width=3*scale)
-    draw.line((387*scale,257*scale,400*scale,269*scale,387*scale,281*scale), fill=accent,width=3*scale)
-    text(360,391,'Drag RadioVoice into Applications',20,(231,241,244),True,True)
-    text(360,424,'Then open it from Applications and choose your microphone.',13,(146,161,176),center=True)
+    text(360,380,'Double-click to install / Kliknij dwukrotnie',18,(231,241,244),True,True)
+    text(360,414,'RadioVoice + virtual microphone / wirtualny mikrofon',13,(146,161,176),center=True)
     draw.line((40*scale,465*scale,680*scale,465*scale), fill=(44,57,68),width=scale)
     text(360,478,'MICROPHONE  /  EFFECTS  /  YOUR APPS',10,(114,139,150),True,True)
     return image

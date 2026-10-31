@@ -22,8 +22,20 @@ other dependencies below stand in the way.
 | [ASIO SDK](https://www.steinberg.net/developers/) (host subset) | GPLv3 **or** proprietary Steinberg licence; the `host/` helpers are BSD-3-Clause | **yes** (under GPLv3) | vendored in `third_party/asiosdk` |
 | [RNNoise](https://github.com/xiph/rnnoise) | BSD-3-Clause | no | fetched at configure time, with its model downloaded separately, only when `RV_ENABLE_RNNOISE=ON` |
 
-Only the ASIO SDK is vendored, and only a nine-file subset of it. Everything
-else is fetched by CMake at configure time.
+The ASIO host subset and the macOS BlackHole driver source are vendored.
+Other build dependencies are fetched by CMake at configure time.
+
+### BlackHole (macOS driver)
+
+The RadioVoice virtual microphone is an independently branded fork of
+[BlackHole](https://github.com/ExistentialAudio/BlackHole), Copyright Existential
+Audio Inc., under GPLv3. Its complete upstream license is preserved in
+`driver/macos/upstream/LICENSE` and included in the application and driver bundles.
+The pinned source, provenance, RadioVoice configuration and build instructions
+are in `driver/macos/`. This does not grant rights to BlackHole trademarks or
+artwork; RadioVoice uses its own names, factory UUID, bundle ID and icon.
+Corresponding source and build scripts accompany releases in this repository's
+source archive. This component remains GPL even if a separate VST3 license is used.
 
 ### RNNoise
 

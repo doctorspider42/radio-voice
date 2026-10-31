@@ -24,16 +24,22 @@ Windows ASIO backend on macOS.
 
 ## Routing
 
-1. Install BlackHole 2ch separately using its official installer or Homebrew.
-2. In Audio MIDI Setup, set BlackHole to 48,000 Hz so RNNoise can run.
-3. Allow RadioVoice microphone access on its first launch.
-4. In Devices, select a physical microphone and BlackHole as the output.
-5. In Discord, OBS or Teams, select BlackHole as the microphone.
-6. For local listening, enable Monitor and select headphones.
+1. Run RadioVoice.pkg from the DMG to install the app and virtual microphone.
+2. Allow RadioVoice microphone access on its first launch.
+3. In Devices, select a physical microphone. RadioVoice Send is selected automatically.
+4. In Discord, OBS or Teams, select **RadioVoice** as the microphone.
+5. For local listening, enable Monitor and select headphones.
+
+The HAL bundle has a visible input-only RadioVoice device and a hidden output-only
+RadioVoice Send device. Ordinary system enumeration omits the sending device;
+RadioVoice resolves it by UID. Other applications can resolve that UID too:
+this is presentation, not an access-control mechanism. Both use stereo float
+samples at 48 kHz. Existing BlackHole routes migrate when our own driver is found;
+other explicitly selected outputs are preserved.
 
 A Multi-Output or Aggregate Device is not required for this arrangement.
 Keep the system output and the receiving application's speakers on physical
-headphones, rather than feeding them back into BlackHole.
+headphones.
 
 Each stream opens at the selected device's native rate and buffer size. Those
 values can be changed in Audio MIDI Setup; device format changes trigger engine
@@ -64,6 +70,12 @@ microphone access. `RADIOVOICE_SMOKE_FRAMES` can extend the run for visual
 inspection. `RADIOVOICE_DATA_DIR` overrides the normal settings directory for
 isolated development runs.
 
+The HAL interface test loads the actual driver bundle without installing it or
+capturing a microphone. It verifies visible input-only / hidden output-only
+devices, stable UIDs, stereo 48 kHz samples, bit-exact loopback across ring-buffer
+wraparound and silence after the sender stops. This does not replace an installed
+CoreAudio/Discord integration check.
+
 ## Preview boundaries
 
 - The built-in microphone → full DSP chain → BlackHole → independent capture
@@ -78,23 +90,23 @@ isolated development runs.
   fit. Resizable editors negotiate a fitting size with the plugin.
 - Automatic updates are manual on macOS; the Windows updater is excluded from
   the Mac target. Universal DMGs support Developer ID signing and Apple
-  notarization; both app and image receive stapled tickets when enabled.
+  notarization; app, unified PKG and DMG receive stapled tickets when enabled.
 - Login items use macOS ServiceManagement. Registration can depend on the local
   bundle's signing/installation status; failures are reported in the log. Test
   from a stable location such as Applications before enabling start at login.
 - Long-running drift, unplug/replug, sleep/wake and Bluetooth profile changes
   still need hardware testing. Intel runtime behavior has not been verified.
 
-## End-to-end BlackHole check
+## End-to-end virtual microphone check
 
-With BlackHole installed and microphone access granted, close RadioVoice and run:
+With the RadioVoice driver (or BlackHole fallback) installed and microphone access granted, close RadioVoice and run:
 
 ```sh
 open build-macos/bin/RadioVoice.app --args --verify-route
 ```
 
 The normal application stays open. A separate capture stream reads the selected
-BlackHole input for 15 seconds: six seconds of normal processing, three muted,
+RadioVoice input (or BlackHole input for the fallback route) for 15 seconds: six seconds of normal processing, three muted,
 then six restored. Speak during both normal phases. The first second after each
 transition is discarded so device buffers and effect lookahead can drain.
 

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Installer supplies the destination volume as argument 3. Never restart the
+# running host's audio service when installing onto an offline volume.
+set -eu
+if [ "${3:-/}" = / ]; then
+    /usr/bin/killall -TERM coreaudiod || true
+fi
+exit 0

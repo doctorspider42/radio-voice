@@ -45,12 +45,12 @@ untranslated one.
 `src/platform/macos` contains the Cocoa/Metal entry point, AUHAL CoreAudio
 streams and enumeration, native VST3 editor containers, filesystem integration
 and login items. The redesigned ImGui panels and DSP remain shared. Do not
-change system-wide audio rates or buffer sizes when opening a stream. Use
-BlackHole as a separately installed virtual cable, not the Windows WaveRT driver.
+change system-wide audio rates or buffer sizes when opening a stream. The macOS HAL driver in `driver/macos` is an independently branded BlackHole fork,
+with a visible RadioVoice input and a hidden sending output. Keep its stable UIDs.
 
 `./build-macos.sh` builds `build-macos/bin/RadioVoice.app` and signs it with the
 configured permanent identity (or ad-hoc for unconfigured development builds).
-`tools/package_macos.py` creates a branded DMG, signs a private copy of the app,
+`tools/package_macos.py` creates a branded DMG containing a unified app/driver PKG, signs private copies,
 and verifies the payload after mounting the final read-only image. See
 `installer/macos/README.md` for signing precedence and CI secrets.
 `ctest --test-dir build-macos --output-on-failure` checks Unicode, ARM denormal

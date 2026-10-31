@@ -9,6 +9,15 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.8.0] — 2026-10-31
+
+- macOS now includes its own RadioVoice virtual microphone, based on BlackHole.
+  Choose RadioVoice as the microphone in Discord, OBS or Teams; its sending
+  output stays hidden from ordinary system device lists.
+- The macOS DMG now contains one installer for both the application and audio
+  driver. No separate BlackHole download is needed. Installation briefly
+  restarts system audio and preserves existing BlackHole installations.
+
 ## [0.7.1] — 2026-10-31
 
 ### Added

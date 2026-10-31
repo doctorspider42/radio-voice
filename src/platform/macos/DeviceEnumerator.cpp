@@ -1,6 +1,7 @@
 #include "audio/DeviceEnumerator.h"
 #include "platform/macos/CoreAudioDevice.h"
 #include "core/Strings.h"
+#include "Identity.h"
 #include <algorithm>
 #include <chrono>
 
@@ -53,6 +54,22 @@ void DeviceEnumerator::refresh()
             }
         }
     }
+    // Hidden HAL devices are intentionally absent from ordinary enumeration.
+    // Resolve our stable UID explicitly, but only advertise a real output.
+    const auto send = resolve(RV_AUDIO_OUTPUT_UID);
+    if (send != kAudioObjectUnknown && channels(send, false) == 2 &&
+        stringProperty(send, kAudioDevicePropertyDeviceUID) == RV_AUDIO_OUTPUT_UID &&
+        std::none_of(found.begin(), found.end(), [](const auto& d) { return d.id == RV_AUDIO_OUTPUT_UID; })) {
+        DeviceInfo info;
+        info.id = RV_AUDIO_OUTPUT_UID;
+        info.name = RV_AUDIO_SEND_NAME;
+        info.backend = BackendType::CoreAudio;
+        info.isOutput = true;
+        info.maxOutputChannels = 2;
+        info.defaultSampleRate = 48000;
+        info.isVirtualCable = true;
+        found.push_back(std::move(info));
+    }
     std::lock_guard lock(mutex_);
     devices_ = std::move(found);
     lastRefreshMs_ = nowMs();
@@ -70,7 +87,7 @@ std::vector<DeviceInfo> DeviceEnumerator::all() const
 std::vector<DeviceInfo> DeviceEnumerator::inputs(BackendType backend) const
 {
     auto list = all();
-    std::erase_if(list, [backend](const auto& d) { return !d.isInput || d.backend != backend; });
+    std::erase_if(list, [backend](const auto& d) { return !d.isInput || d.backend != backend || d.id == RV_AUDIO_INPUT_UID; });
     return list;
 }
 std::vector<DeviceInfo> DeviceEnumerator::outputs(BackendType backend) const

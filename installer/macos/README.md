@@ -1,106 +1,119 @@
-# macOS disk image and signing
+# Unified macOS installer and signing
 
-The installer is a read-only, compressed DMG with a Retina background, RadioVoice
-icon and `/Applications` shortcut. Drag the application to Applications to
-install it. BlackHole remains a separate optional installation.
+The branded, read-only DMG contains **RadioVoice.pkg**. Double-click it to install
+both `/Applications/RadioVoice.app` and
+`/Library/Audio/Plug-Ins/HAL/RadioVoice.driver`. The welcome and conclusion are
+localized in English and Polish. Administrator authorization is required;
+CoreAudio restarts once on the running startup volume, briefly interrupting audio.
+The driver exposes a visible **RadioVoice** microphone and a hidden **RadioVoice
+Send** output. No separate BlackHole installation is needed. Existing BlackHole
+bundles and user settings are preserved. See [driver details](../../driver/macos/README.md).
 
-## Build a signed universal installer
+## Build
 
-Requires macOS, Xcode Command Line Tools, CMake, Ninja and Python 3.10 or newer.
-The background and ICNS are committed; Pillow is only needed to regenerate them.
+Requires macOS 13+, Xcode Command Line Tools, CMake, Ninja and Python 3.10+.
 
 ```sh
 ./build-macos.sh '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
 python3 -m venv build-dmg-env
 build-dmg-env/bin/pip install -r installer/macos/requirements.txt
-build-dmg-env/bin/python tools/package_macos.py
+build-dmg-env/bin/python tools/package_macos.py --notarize
 ```
 
-The image and its SHA-256 sidecar are written under `dist/`. The filename contains
-the version from `VERSION` and the architectures actually present in the app,
-not a manually supplied architecture label. The packager rejects stale versions.
+CMake builds the app and HAL bundle with the same architecture list. Packaging
+rejects stale versions and mismatched architectures. It stages physical copies,
+signs the app and driver, builds two component packages and a single flat product
+package, and places the package in the DMG. The original builds are unchanged.
+The app is non-relocatable: updates replace /Applications/RadioVoice.app rather
+than finding a copy in a build tree or mounted backup. Driver updates retain its
+UIDs and replace only our HAL bundle. The uninstall script included in the app
+checks the installed driver's bundle ID before removing only that driver.
 
-It signs a physical copy of the application, including LICENSE and NOTICE.md,
-with a timestamp, then signs and verifies the disk image. The original build is
-not modified. Before publishing the result, the packager mounts the final image
-read-only and checks the app's strict signature, architectures and Applications
-link. It does not script Finder or modify macOS security settings.
+The packager expands the finished PKG and verifies both executable bundles,
+checks the product signature, verifies the DMG, then mounts it read-only and
+compares the contained PKG byte-for-byte with the verified package. SHA-256
+sidecars are produced. Existing distribution files survive failed builds.
 
-## Signing identity
-
-The same permanent Developer ID policy as Zitter is used. Precedence:
-
-1. `--identity` (packager), or the `RV_CODESIGN_IDENTITY` CMake cache variable.
-2. `RADIOVOICE_CODESIGN_IDENTITY` environment variable.
-3. `.radiovoice-signing.json` at the repository root, containing `{"identity":"SHA1"}`.
-4. `../zitter/.zitter-signing.json`, when that local checkout exists.
-
-The local preference is ignored by Git; it contains only the certificate
-fingerprint, never a private key. The certificate and private key stay in Keychain.
-An unavailable configured identity fails signing; it never silently falls back.
-Unconfigured development builds may use ad-hoc signing. Distribution packaging
-requires an identity unless `--unsigned` is explicitly supplied; those images are
-named `*-unsigned.dmg` and are not represented as Developer ID-signed releases.
-
-Signing uses the same permanent Developer ID as Zitter, with a secure timestamp.
-The app also enables Hardened Runtime for notarization, with microphone access
-and the library-validation exception required to load other vendors' VST3 effects.
-No global Gatekeeper bypass is part of the installer.
-
-To notarize, set `MACOS_NOTARY_KEY_PATH` to the App Store Connect `.p8` file,
-`MACOS_NOTARY_KEY_ID` to its Key ID, and `MACOS_NOTARY_ISSUER_ID` to its team
-Issuer ID (omit issuer for an individual API key). Add `--notarize` to the
-packaging command. The packager submits a signed app ZIP, staples the accepted
-app ticket, creates/signs the DMG, submits it and staples the image ticket.
-Any rejection or timeout fails packaging; the previous installer is preserved.
-Rejection logs are retained under `dist/notarization-<submission-id>.json`.
-
-To regenerate artwork from the existing icon source and layout code:
+For a local preview while waiting for an Installer certificate:
 
 ```sh
-build-dmg-env/bin/pip install Pillow==13.0.0
-build-dmg-env/bin/python tools/make-macos-assets.py
+build-dmg-env/bin/python tools/package_macos.py --unsigned-installer
 ```
 
-## CI and releases
+This still signs app and driver with the configured Application certificate,
+but the PKG is unsigned and the image is explicitly named `*-unsigned.dmg`.
+It cannot be notarized or published as a production installer. `--unsigned`
+uses ad-hoc signatures for both binaries as well. There is no silent fallback.
 
-`.github/workflows/release.yml` builds the Windows installer and a universal Mac
-DMG on main, `codex/**` pushes, pull requests to main and manual runs. The Mac job
-runs on `macos-15`, tests native DSP/portability and packaging choices, and checks
-that both architectures exist. Physical-device tests remain local.
+## Application and driver signatures
 
-Artifacts are uploaded for every successful build. A single publish job on main
-waits for both application builds, collects the installers and creates the release
-using the matching CHANGELOG section. An existing version is not overwritten.
-The Windows driver job remains best effort.
+Both use **Developer ID Application**, matching Zitter. Identity precedence:
 
-For permanent CI signing configure these repository Actions secrets:
+1. `--identity` (packager), or `RV_CODESIGN_IDENTITY` (CMake).
+2. `RADIOVOICE_CODESIGN_IDENTITY` environment variable.
+3. Local, Git-ignored `.radiovoice-signing.json`: `{"identity":"SHA1"}`.
+4. `../zitter/.zitter-signing.json`.
 
-- `MACOS_CERTIFICATE_P12_BASE64`: the existing Developer ID Application identity,
-  including its private key, exported as a password-protected PKCS#12 and Base64.
-- `MACOS_CERTIFICATE_PASSWORD`: that PKCS#12 password.
+The app uses Hardened Runtime, microphone entitlement and the VST3 library
+validation exception. The HAL bundle has Hardened Runtime without application
+entitlements. This is a userspace CoreAudio plug-in, not a kernel extension or a
+DriverKit extension; no reduced security or DriverKit approval is required.
 
-For Apple notarization also configure:
+## Developer ID Installer certificate
 
-- Secret `MACOS_NOTARY_KEY_P8`: the App Store Connect API private key contents.
-- Variable `MACOS_NOTARY_KEY_ID`: the corresponding API Key ID.
-- Secret `MACOS_NOTARY_ISSUER_ID`: the team Issuer ID (omit for individual keys).
+The outer flat PKG needs a separate **Developer ID Installer** certificate.
+Developer ID Application and the App Store Connect `.p8` key cannot replace it.
+Use the same Apple developer team as the existing Application identity.
 
-When the notary key is present, signed CI builds require notarization and attach
-both tickets before uploading artifacts. Supplying a bad key fails the build.
+1. As the team's **Account Holder**, open Apple Developer → Certificates,
+   Identifiers & Profiles → Certificates → **+** → **Developer ID Installer**.
+   This is different from Mac Installer Distribution (Mac App Store).
+2. In Keychain Access, use Certificate Assistant → Request a Certificate from
+   a Certificate Authority. Save the CSR to disk and upload it in the portal.
+3. Download the `.cer` and open it on the same Mac that generated the CSR.
+   In My Certificates, verify that the certificate expands to show its private key.
+4. Export the certificate **with its private key** as a password-protected `.p12`.
+   Do not commit the certificate, private key or password to the repository.
+5. Select the installed identity with `--installer-identity SHA1` or environment
+   variable `RADIOVOICE_INSTALLER_IDENTITY`. With exactly one usable Installer
+   identity in Keychain, it is selected automatically.
 
-Optionally pin the expected certificate SHA-1 with the repository Actions variable
-`MACOS_CODESIGN_IDENTITY`. It must match the imported identity. To match Zitter,
-use the exact same certificate rather than generating a new identity per run.
+[Apple's certificate instructions](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
 
-The workflow imports the certificate into a temporary Keychain restricted to
-codesign, signs the app and DMG, and removes the temporary Keychain afterwards.
-Signing secrets are exposed only to main builds or a maintainer's manual run
-with the `sign_macos` input explicitly enabled, never pull requests or ordinary
-branch previews. Credentials are not printed. Supplying these secrets shares signing capability
-with that repository's CI; configuring the workflow does not export or upload
-local keys. Fork pull requests receive no secrets.
+For CI, add these **new** Actions secrets:
 
-Until a certificate is configured, CI creates explicitly unsigned development
-images. No certificate is generated or trusted automatically, and broken supplied
-credentials fail the job instead of producing an unsigned substitute.
+- `MACOS_INSTALLER_CERTIFICATE_P12_BASE64`: Base64-encoded Installer `.p12`.
+- `MACOS_INSTALLER_CERTIFICATE_PASSWORD`: its password.
+
+Optionally pin its SHA-1 in repository variable `MACOS_INSTALLER_IDENTITY`.
+The existing `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD` and
+`MACOS_CODESIGN_IDENTITY` continue to identify Developer ID Application.
+Set a password interactively without putting it in chat or shell history:
+
+```sh
+gh secret set MACOS_INSTALLER_CERTIFICATE_PASSWORD --repo doctorspider42/radio-voice
+```
+
+## Notarization and CI
+
+Existing notary credentials remain valid: `MACOS_NOTARY_KEY_PATH`,
+`MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID` (omit issuer for individual keys).
+`--notarize` submits/staples the app, the signed PKG containing the signed driver,
+and the signed DMG. Rejections and timeouts fail the build. Rejection logs stay in
+`dist/notarization-<submission-id>.json`.
+
+CI uses `MACOS_NOTARY_KEY_P8` and `MACOS_NOTARY_ISSUER_ID` secrets plus
+`MACOS_NOTARY_KEY_ID` variable. The Application and Installer identities are
+imported into a temporary Keychain, which is deleted afterwards. Signing secrets
+are available only on main and explicitly signed manual builds. Those builds
+require both certificates and notarization; missing credentials fail the job.
+Ordinary branch/PR builds produce explicitly unsigned development images.
+
+CI builds both architectures and tests portability, actual HAL loopback, hidden
+output properties, and packaging logic. Physical microphone tests remain local.
+Main publishes a release only after both Windows and Mac builds succeed. Do not
+merge this installer migration until Installer signing secrets are configured.
+
+The original ICNS and Retina background are committed. Regenerate them with
+`build-dmg-env/bin/pip install Pillow==13.0.0` and
+`build-dmg-env/bin/python tools/make-macos-assets.py` (Python 3.11+).

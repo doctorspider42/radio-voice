@@ -1,5 +1,9 @@
 # RadioVoice Virtual Audio Cable — driver
 
+For the macOS userspace virtual microphone and unified installer, see
+[macOS driver](macos/README.md). The remainder of this document covers Windows.
+
+
 A kernel driver that creates a pair of audio endpoints wired to each other:
 
 | Endpoint | Appears as | Role |

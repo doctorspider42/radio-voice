@@ -1,4 +1,5 @@
 #include "platform/macos/RouteProbe.h"
+#include "Identity.h"
 #include "app/App.h"
 #include "core/Paths.h"
 #include "core/Log.h"
@@ -23,12 +24,12 @@ bool RouteProbe::start()
     const auto id = app_.outputDeviceId();
     const auto outputs = devices.virtualCableOutputs();
     const auto chosen = std::find_if(outputs.begin(), outputs.end(), [&](const auto& d) {
-        return d.id == id && d.name.find("BlackHole") != std::string::npos;
+        return d.id == id && (d.id == RV_AUDIO_OUTPUT_UID || d.name.find("BlackHole") != std::string::npos);
     });
-    if (chosen == outputs.end()) { finish("Select BlackHole as the main output before verifying the route."); return false; }
+    if (chosen == outputs.end()) { finish("Select RadioVoice Send or BlackHole as the main output before verifying the route."); return false; }
     cableName_ = chosen->name;
     StreamConfig config;
-    config.deviceId = id;
+    config.deviceId = id == RV_AUDIO_OUTPUT_UID ? RV_AUDIO_INPUT_UID : id;
     if (!receiver_.openInput(config)) { finish(receiver_.error()); return false; }
     ring_.resize(receiver_.actualChannels(), static_cast<int>(receiver_.actualSampleRate()) * 2);
     scratch_.resize(static_cast<size_t>(4096) * receiver_.actualChannels());

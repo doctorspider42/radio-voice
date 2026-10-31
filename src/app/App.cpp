@@ -1,3 +1,6 @@
+#ifdef __APPLE__
+#include "Identity.h"
+#endif
 #include "app/App.h"
 
 #include "core/Platform.h"
@@ -27,7 +30,7 @@ namespace {
 using namespace rv::gui;
 
 #ifdef __APPLE__
-constexpr const char* kVirtualCableUrl = "https://existential.audio/blackhole/";
+constexpr const char* kVirtualCableUrl = "https://github.com/doctorspider42/radio-voice/releases/latest";
 #else
 constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
 #endif
@@ -83,8 +86,14 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
     // that follows names a GUID that appears nowhere the user can act on.
     if (config_.input.deviceId.empty()) {
         const auto inputs = devices_.inputs(kDefaultBackend);
+        const auto physical = std::find_if(inputs.begin(), inputs.end(), [](const auto& d) { return !d.isVirtualCable; });
+        if (physical != inputs.end()) {
+            config_.input.backend = kDefaultBackend;
+            config_.input.deviceId = physical->id;
+            config_.input.deviceName = physical->name;
+        }
         for (const auto& device : inputs) {
-            if (device.isDefault) {
+            if (device.isDefault && !device.isVirtualCable) {
                 config_.input.backend    = kDefaultBackend;
                 config_.input.deviceId   = device.id;
                 config_.input.deviceName = device.name;
@@ -93,6 +102,17 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
         }
     }
 
+#ifdef __APPLE__
+    // Migrate the formerly recommended BlackHole route when our driver exists.
+    // Preserve deliberately selected hardware and other virtual cable outputs.
+    if (config_.output.deviceId.empty() || icontains(config_.output.deviceName, "BlackHole")) {
+        if (const auto send = devices_.find(RV_AUDIO_OUTPUT_UID, kDefaultBackend)) {
+            config_.output.backend = send->backend;
+            config_.output.deviceId = send->id;
+            config_.output.deviceName = send->name;
+        }
+    }
+#endif
     if (config_.output.deviceId.empty()) {
         const auto cables = devices_.virtualCableOutputs();
         // "CABLE Input" is the side you send audio *to*; its counterpart
@@ -995,8 +1015,8 @@ void App::renderVirtualCableHint()
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
     ImGui::TextWrapped(
 #ifdef __APPLE__
-        "Install BlackHole 2ch, then choose BlackHole as the output here and "
-        "as the microphone in Discord, OBS, Teams or your receiving application. "
+        "Run the RadioVoice macOS installer to install the audio driver. "
+        "Then choose RadioVoice as the microphone in Discord, OBS or Teams. "
         "Use Monitor to hear the processed signal through headphones."
 #else
         "Windows has no built-in way for one application to expose an audio "
@@ -1008,7 +1028,7 @@ void App::renderVirtualCableHint()
     ImGui::PopStyleColor();
 
 #ifdef __APPLE__
-    if (ImGui::SmallButton("Get BlackHole 2ch")) {
+    if (ImGui::SmallButton("Get the RadioVoice installer")) {
 #else
     if (ImGui::SmallButton("Open the VB-CABLE download page")) {
 #endif
