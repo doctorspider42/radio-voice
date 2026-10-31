@@ -81,6 +81,12 @@ IDXGISwapChain*         g_swapChain     = nullptr;
 ID3D11RenderTargetView* g_renderTarget  = nullptr;
 
 bool g_resizePending = false;
+
+/// Set once ImGui and Direct3D are ready to draw; see drawFrame.
+bool g_frameReady = false;
+bool g_inFrame    = false;
+
+bool drawFrame();
 UINT g_resizeWidth   = 0;
 UINT g_resizeHeight  = 0;
 
@@ -516,6 +522,7 @@ LRESULT WINAPI windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (g_app)
                 g_app->setWindowSize(static_cast<int>(g_resizeWidth),
                                      static_cast<int>(g_resizeHeight));
+            drawFrame();
             return 0;
 
         case WM_DPICHANGED:
@@ -548,6 +555,60 @@ LRESULT WINAPI windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     return ::DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+/// One frame: resize the buffers if the window changed, build the interface,
+/// draw it and present it. Returns true when the application asked to exit.
+///
+/// Called from the main loop, and also straight from WM_SIZE: while the user
+/// drags a window edge Windows runs its own modal loop and ours does not turn,
+/// so without this the frame - and a plugin editor docked in it - would only
+/// catch up once the mouse is released.
+bool drawFrame()
+{
+    if (!g_frameReady || g_inFrame || !g_app)
+        return false;
+    g_inFrame = true;
+
+    const ImVec4 clearColour = rv::gui::theme::toVec4(rv::gui::theme::kBackground);
+
+    if (g_resizePending && g_resizeWidth > 0 && g_resizeHeight > 0) {
+        releaseRenderTarget();
+        g_swapChain->ResizeBuffers(0, g_resizeWidth, g_resizeHeight,
+                                   DXGI_FORMAT_UNKNOWN, 0);
+        createRenderTarget();
+        g_resizePending = false;
+    }
+
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    g_app->render();
+
+    ImGui::Render();
+
+    g_context->OMSetRenderTargets(1, &g_renderTarget, nullptr);
+    const float clear[4] = {clearColour.x, clearColour.y, clearColour.z, 1.0f};
+    g_context->ClearRenderTargetView(g_renderTarget, clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+    // The window's message pump shares this thread. Never wait inside
+    // Present for DWM to release a buffer: that also blocks Close and tray
+    // commands. A busy compositor can skip a frame while input keeps flowing.
+    const HRESULT presented = g_swapChain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
+    static bool presentFailureLogged = false;
+    if (FAILED(presented) && presented != DXGI_ERROR_WAS_STILL_DRAWING) {
+        if (!presentFailureLogged)
+            RV_ERROR("could not present the window (0x%08lX)",
+                     static_cast<unsigned long>(presented));
+        presentFailureLogged = true;
+    } else {
+        presentFailureLogged = false;
+    }
+
+    g_inFrame = false;
+    return g_app->wantsExit();
 }
 
 /// Whether `commandLine` carries `name`, in either the `--x` or `/x` spelling.
@@ -648,11 +709,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
     // the 32x32 one down for the title bar.
     wc.hIcon         = loadAppIcon(instance, SM_CXICON, SM_CYICON);
     wc.hIconSm       = loadAppIcon(instance, SM_CXSMICON, SM_CYSMICON);
-    wc.hbrBackground = ::CreateSolidBrush(RGB(0x12, 0x14, 0x18));
+    wc.hbrBackground = ::CreateSolidBrush(RGB(0x0A, 0x0C, 0x10));
     wc.lpszClassName = kWindowClass;
     ::RegisterClassExW(&wc);
 
-    HWND hwnd = ::CreateWindowExW(0, kWindowClass, kWindowTitle, WS_OVERLAPPEDWINDOW,
+    // WS_CLIPCHILDREN because a plugin's own editor can be docked inside the
+    // window as a child, and the frame must not be painted over it.
+    HWND hwnd = ::CreateWindowExW(0, kWindowClass, kWindowTitle,
+                                  WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                                   CW_USEDEFAULT, CW_USEDEFAULT,
                                   saved.windowWidth, saved.windowHeight,
                                   nullptr, nullptr, instance, nullptr);
@@ -729,7 +793,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
     if (!app->initialize(hwnd, fonts, dpiScale, std::move(saved)))
         RV_ERROR("application initialisation reported a failure");
 
-    const ImVec4 clearColour = rv::gui::theme::toVec4(rv::gui::theme::kBackground);
+    g_frameReady = true;
 
     bool running = true;
     while (running) {
@@ -804,43 +868,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
             RV_INFO("display scale changed to %.0f%%", static_cast<double>(scale * 100.0f));
         }
 
-        if (g_resizePending && g_resizeWidth > 0 && g_resizeHeight > 0) {
-            releaseRenderTarget();
-            g_swapChain->ResizeBuffers(0, g_resizeWidth, g_resizeHeight,
-                                       DXGI_FORMAT_UNKNOWN, 0);
-            createRenderTarget();
-            g_resizePending = false;
-        }
-
-        ImGui_ImplDX11_NewFrame();
-        ImGui_ImplWin32_NewFrame();
-        ImGui::NewFrame();
-
-        app->render();
-
-        if (app->wantsExit())
+        if (drawFrame())
             running = false;
-
-        ImGui::Render();
-
-        g_context->OMSetRenderTargets(1, &g_renderTarget, nullptr);
-        const float clear[4] = {clearColour.x, clearColour.y, clearColour.z, 1.0f};
-        g_context->ClearRenderTargetView(g_renderTarget, clear);
-        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
-        // The window's message pump shares this thread. Never wait inside
-        // Present for DWM to release a buffer: that also blocks Close and tray
-        // commands. A busy compositor can skip a frame while input keeps flowing.
-        const HRESULT presented = g_swapChain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
-        static bool presentFailureLogged = false;
-        if (FAILED(presented) && presented != DXGI_ERROR_WAS_STILL_DRAWING) {
-            if (!presentFailureLogged)
-                RV_ERROR("could not present the window (0x%08lX)",
-                         static_cast<unsigned long>(presented));
-            presentFailureLogged = true;
-        } else {
-            presentFailureLogged = false;
-        }
 
         // Non-blocking presentation needs its own frame cap. Input wakes the
         // wait immediately; a full compositor queue must not spin on the GPU.
@@ -852,6 +881,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
     // very end - after the engine, the window and the notification icon.
     const std::filesystem::path installer = app->pendingInstaller();
 
+    g_frameReady = false;
     app->shutdown();
     g_app = nullptr;
     app.reset();

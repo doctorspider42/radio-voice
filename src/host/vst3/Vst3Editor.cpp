@@ -2,6 +2,11 @@
 
 #if RV_HAS_VST3
 
+#include <algorithm>
+#include <cmath>
+
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
+
 #include "core/Log.h"
 #include "core/Strings.h"
 
@@ -89,6 +94,62 @@ bool Vst3EditorWindow::open(IPlugView* view, const std::string& title, HWND owne
         return false;
     }
 
+    if (!attach(view))
+        return false;
+
+    ::ShowWindow(hwnd_, SW_SHOW);
+    ::UpdateWindow(hwnd_);
+    return true;
+}
+
+bool Vst3EditorWindow::openChild(IPlugView* view, HWND parent)
+{
+    if (!view || !parent)
+        return false;
+    if (hwnd_)
+        return true;
+
+    if (view->isPlatformTypeSupported(kPlatformTypeHWND) != kResultTrue) {
+        RV_ERROR("VST3 editor does not support HWND embedding");
+        return false;
+    }
+
+    registerWindowClass();
+
+    ViewRect rect{};
+    if (view->getSize(&rect) != kResultTrue || rect.getWidth() <= 0 || rect.getHeight() <= 0) {
+        rect.left = rect.top = 0;
+        rect.right  = kFallbackWidth;
+        rect.bottom = kFallbackHeight;
+    }
+
+    // Embedded, there is no border to drag: the module view sizes the editor
+    // itself through fit, as far as the plugin lets it.
+    resizable_ = view->canResize() == kResultTrue;
+    child_     = true;
+
+    hwnd_ = ::CreateWindowExW(0, kWindowClass, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                              0, 0, rect.getWidth(), rect.getHeight(),
+                              parent, nullptr, ::GetModuleHandleW(nullptr), this);
+    if (!hwnd_) {
+        RV_ERROR("could not create the embedded VST3 editor window");
+        return false;
+    }
+
+    if (!attach(view))
+        return false;
+
+    viewSize(baseWidth_, baseHeight_);
+
+    FUnknownPtr<IPlugViewContentScaleSupport> scaler(view_);
+    RV_INFO("docked VST3 editor: %d x %d, %s, %s", baseWidth_, baseHeight_,
+            resizable_ ? "resizable" : "fixed size",
+            scaler ? "offers content scaling" : "no content scaling");
+    return true;
+}
+
+bool Vst3EditorWindow::attach(IPlugView* view)
+{
     view_ = view;
     view_->setFrame(this);
 
@@ -108,9 +169,109 @@ bool Vst3EditorWindow::open(IPlugView* view, const std::string& title, HWND owne
         resizeToClient(attachedRect.getWidth(), attachedRect.getHeight());
     }
 
-    ::ShowWindow(hwnd_, SW_SHOW);
-    ::UpdateWindow(hwnd_);
     return true;
+}
+
+void Vst3EditorWindow::place(int x, int y)
+{
+    if (!hwnd_ || !child_)
+        return;
+
+    ::SetWindowPos(hwnd_, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+void Vst3EditorWindow::hide()
+{
+    if (hwnd_ && child_ && ::IsWindowVisible(hwnd_))
+        ::ShowWindow(hwnd_, SW_HIDE);
+}
+
+void Vst3EditorWindow::shrinkToFit(ViewRect& rect, int areaWidth, int areaHeight)
+{
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        view_->checkSizeConstraint(&rect);
+        const int width  = rect.getWidth();
+        const int height = rect.getHeight();
+        if (width <= 0 || height <= 0 || (width <= areaWidth && height <= areaHeight))
+            return;
+
+        const double k = std::min(static_cast<double>(areaWidth) / width,
+                                  static_cast<double>(areaHeight) / height);
+        rect.right  = rect.left + static_cast<int32>(width * k);
+        rect.bottom = rect.top + static_cast<int32>(height * k);
+    }
+    view_->checkSizeConstraint(&rect);
+}
+
+void Vst3EditorWindow::fit(int areaWidth, int areaHeight, bool force)
+{
+    if (!hwnd_ || !child_ || !view_ || areaWidth <= 0 || areaHeight <= 0)
+        return;
+    if (!force && areaWidth == fitWidth_ && areaHeight == fitHeight_)
+        return;
+    if (force)
+        scale_ = 0.0;
+    fitWidth_  = areaWidth;
+    fitHeight_ = areaHeight;
+
+    if (resizable_) {
+        // Start from the editor's own proportions and let the plugin move the
+        // rectangle to the nearest size it accepts - a minimum, a fixed
+        // aspect, a step. A plugin that keeps its aspect from the width alone
+        // can answer with something taller than the area, so the answer is
+        // scaled down and asked about again until it fits.
+        ViewRect rect{0, 0, areaWidth, areaHeight};
+        if (baseWidth_ > 0 && baseHeight_ > 0) {
+            const double k = std::min(static_cast<double>(areaWidth) / baseWidth_,
+                                      static_cast<double>(areaHeight) / baseHeight_);
+            rect.right  = static_cast<int32>(baseWidth_ * k);
+            rect.bottom = static_cast<int32>(baseHeight_ * k);
+        }
+        shrinkToFit(rect, areaWidth, areaHeight);
+        if (rect.getWidth() <= 0 || rect.getHeight() <= 0)
+            return;
+        resizeToClient(rect.getWidth(), rect.getHeight());
+        view_->onSize(&rect);
+        return;
+    }
+
+    // A fixed-size editor can still be zoomed, if it says it can. Plenty of
+    // editors - JUCE's among them - redraw themselves at the factor and ask
+    // for the matching size through resizeView.
+    FUnknownPtr<IPlugViewContentScaleSupport> scaler(view_);
+    if (!scaler || baseWidth_ <= 0 || baseHeight_ <= 0)
+        return;
+
+    const double factor = std::clamp(std::min(static_cast<double>(areaWidth) / baseWidth_,
+                                              static_cast<double>(areaHeight) / baseHeight_),
+                                     0.5, 4.0);
+    if (std::abs(factor - scale_) < 0.01)
+        return;
+    if (scaler->setContentScaleFactor(static_cast<IPlugViewContentScaleSupport::ScaleFactor>(factor)) !=
+        kResultTrue) {
+        RV_INFO("VST3 editor declined a content scale of %.2f", factor);
+        return;
+    }
+    scale_ = factor;
+
+    // For an editor that rescales without asking to be resized.
+    ViewRect rect{};
+    if (view_->getSize(&rect) == kResultTrue && rect.getWidth() > 0 && rect.getHeight() > 0)
+        resizeToClient(rect.getWidth(), rect.getHeight());
+}
+
+bool Vst3EditorWindow::viewSize(int& width, int& height) const
+{
+    if (!hwnd_)
+        return false;
+
+    RECT client{};
+    if (!::GetClientRect(hwnd_, &client))
+        return false;
+
+    width  = client.right - client.left;
+    height = client.bottom - client.top;
+    return width > 0 && height > 0;
 }
 
 void Vst3EditorWindow::close()
@@ -161,11 +322,21 @@ tresult PLUGIN_API Vst3EditorWindow::resizeView(IPlugView* view, ViewRect* newSi
     if (!view || !newSize || !hwnd_)
         return kInvalidArgument;
 
-    resizeToClient(newSize->getWidth(), newSize->getHeight());
+    ViewRect rect = *newSize;
+
+    // Docked, the editor may not grow past the area it was given - a plugin's
+    // own resize grip would otherwise drag it out of the window for good.
+    // Shrinking is the user's call and is left alone.
+    if (child_ && fitWidth_ > 0 && fitHeight_ > 0 &&
+        (rect.getWidth() > fitWidth_ || rect.getHeight() > fitHeight_)) {
+        shrinkToFit(rect, fitWidth_, fitHeight_);
+    }
+
+    resizeToClient(rect.getWidth(), rect.getHeight());
 
     // The view is told its new size only after the window actually has it,
     // which is the order the specification requires.
-    return view->onSize(newSize);
+    return view->onSize(&rect);
 }
 
 LRESULT CALLBACK Vst3EditorWindow::windowProc(HWND hwnd, UINT message,
@@ -183,7 +354,8 @@ LRESULT CALLBACK Vst3EditorWindow::windowProc(HWND hwnd, UINT message,
         }
 
         case WM_SIZE:
-            if (self && self->view_ && self->resizable_) {
+            // A docked editor is sized by fit, which tells the view itself.
+            if (self && self->view_ && self->resizable_ && !self->child_) {
                 RECT client{};
                 ::GetClientRect(hwnd, &client);
                 ViewRect rect{0, 0, client.right, client.bottom};

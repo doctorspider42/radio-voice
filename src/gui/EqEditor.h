@@ -20,9 +20,11 @@ namespace rv::gui {
 ///   * double-click a band handle     - flat
 ///   * drag the cut markers along the bottom - high-pass / low-pass frequency
 ///
+///   * click a band handle             - select it, when `selectedBand` is given
+///
 /// Returns true on frames where a parameter changed, so the caller can bump the
 /// coefficient revision and mark the configuration dirty.
 bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
-              float sampleRate, ImVec2 size);
+              float sampleRate, ImVec2 size, int* selectedBand = nullptr);
 
 } // namespace rv::gui

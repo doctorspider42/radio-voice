@@ -48,19 +48,34 @@ Fonts loadFonts(float dpiScale)
 
     const auto regularPath  = systemFont(L"segoeui.ttf");
     const auto semiboldPath = systemFont(L"seguisb.ttf");
+    const auto boldPath     = systemFont(L"segoeuib.ttf");
+    // Consolas ships with every supported Windows version. Monospaced digits are
+    // the point: a meter readout in a proportional face shuffles sideways every
+    // time a 1 turns into an 8.
+    const auto monoPath     = systemFont(L"consola.ttf");
+    const auto monoBoldPath = systemFont(L"consolab.ttf");
+
+    const auto orElse = [](const std::filesystem::path& wanted,
+                           const std::filesystem::path& fallback) {
+        return wanted.empty() ? fallback : wanted;
+    };
 
     Fonts fonts;
-    fonts.regular = addFont(io, regularPath, 16.0f * dpiScale);
-    fonts.medium  = addFont(io, semiboldPath.empty() ? regularPath : semiboldPath,
-                            17.0f * dpiScale);
-    fonts.small   = addFont(io, regularPath, 13.0f * dpiScale);
-    fonts.heading = addFont(io, semiboldPath.empty() ? regularPath : semiboldPath,
-                            20.0f * dpiScale);
+    fonts.regular   = addFont(io, regularPath, 15.0f * dpiScale);
+    fonts.medium    = addFont(io, orElse(semiboldPath, regularPath), 16.0f * dpiScale);
+    fonts.small     = addFont(io, regularPath, 12.5f * dpiScale);
+    fonts.heading   = addFont(io, orElse(boldPath, regularPath), 17.0f * dpiScale);
+    fonts.caps      = addFont(io, orElse(boldPath, regularPath), 11.0f * dpiScale);
+    fonts.title     = addFont(io, orElse(boldPath, regularPath), 14.0f * dpiScale);
+    fonts.mono      = addFont(io, orElse(monoPath, regularPath), 13.0f * dpiScale);
+    fonts.monoLarge = addFont(io, orElse(monoBoldPath, orElse(monoPath, regularPath)),
+                              28.0f * dpiScale);
 
     if (!fonts.regular) {
         RV_WARN("Segoe UI is unavailable; falling back to the built-in font");
         fonts.regular = io.Fonts->AddFontDefault();
         fonts.medium = fonts.small = fonts.heading = fonts.regular;
+        fonts.caps = fonts.title = fonts.mono = fonts.monoLarge = fonts.regular;
     } else {
         io.FontDefault = fonts.regular;
     }
@@ -73,26 +88,26 @@ void applyTheme()
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.WindowPadding     = ImVec2(14, 12);
-    style.FramePadding      = ImVec2(10, 6);
+    style.FramePadding      = ImVec2(10, 7);
     style.CellPadding       = ImVec2(8, 5);
     style.ItemSpacing       = ImVec2(10, 8);
     style.ItemInnerSpacing  = ImVec2(7, 5);
     style.IndentSpacing     = 20;
-    style.ScrollbarSize     = 12;
+    style.ScrollbarSize     = 10;
     style.GrabMinSize       = 10;
 
-    style.WindowBorderSize  = 0;
+    style.WindowBorderSize  = 1;
     style.ChildBorderSize   = 1;
     style.PopupBorderSize   = 1;
     style.FrameBorderSize   = 1;
 
-    style.WindowRounding    = 8;
-    style.ChildRounding     = 8;
-    style.FrameRounding     = 5;
-    style.PopupRounding     = 6;
+    style.WindowRounding    = 12;
+    style.ChildRounding     = 12;
+    style.FrameRounding     = 8;
+    style.PopupRounding     = 10;
     style.ScrollbarRounding = 6;
-    style.GrabRounding      = 4;
-    style.TabRounding       = 6;
+    style.GrabRounding      = 6;
+    style.TabRounding       = 8;
 
     style.WindowTitleAlign  = ImVec2(0.0f, 0.5f);
     style.SeparatorTextBorderSize = 1;
@@ -110,11 +125,11 @@ void applyTheme()
     colours[ImGuiCol_TextDisabled]    = theme::toVec4(theme::kTextFaint);
 
     colours[ImGuiCol_FrameBg]         = theme::toVec4(theme::kPanelRaised);
-    colours[ImGuiCol_FrameBgHovered]  = ImVec4(0.18f, 0.20f, 0.25f, 1.0f);
-    colours[ImGuiCol_FrameBgActive]   = ImVec4(0.21f, 0.24f, 0.29f, 1.0f);
+    colours[ImGuiCol_FrameBgHovered]  = theme::toVec4(theme::kControl);
+    colours[ImGuiCol_FrameBgActive]   = theme::toVec4(theme::kBorderBright);
 
     colours[ImGuiCol_TitleBg]         = theme::toVec4(theme::kPanel);
-    colours[ImGuiCol_TitleBgActive]   = theme::toVec4(theme::kPanel);
+    colours[ImGuiCol_TitleBgActive]   = theme::toVec4(theme::kPanelRaised);
     colours[ImGuiCol_TitleBgCollapsed]= theme::toVec4(theme::kPanel);
     colours[ImGuiCol_MenuBarBg]       = theme::toVec4(theme::kPanel);
 
@@ -123,16 +138,16 @@ void applyTheme()
     colours[ImGuiCol_ScrollbarGrabHovered] = theme::toVec4(theme::kAccentDim);
     colours[ImGuiCol_ScrollbarGrabActive]  = theme::toVec4(theme::kAccent);
 
-    colours[ImGuiCol_CheckMark]       = theme::toVec4(theme::kAccent);
+    colours[ImGuiCol_CheckMark]       = theme::toVec4(theme::kAccentLight);
     colours[ImGuiCol_SliderGrab]      = theme::toVec4(theme::kAccent);
-    colours[ImGuiCol_SliderGrabActive]= theme::toVec4(theme::kAccent);
+    colours[ImGuiCol_SliderGrabActive]= theme::toVec4(theme::kAccentLight);
 
     colours[ImGuiCol_Button]          = theme::toVec4(theme::kPanelRaised);
-    colours[ImGuiCol_ButtonHovered]   = ImVec4(0.16f, 0.32f, 0.31f, 1.0f);
-    colours[ImGuiCol_ButtonActive]    = theme::toVec4(theme::kAccentDim);
+    colours[ImGuiCol_ButtonHovered]   = theme::toVec4(theme::kControl);
+    colours[ImGuiCol_ButtonActive]    = theme::toVec4(theme::kAccentFaint);
 
-    colours[ImGuiCol_Header]          = ImVec4(0.16f, 0.32f, 0.31f, 0.60f);
-    colours[ImGuiCol_HeaderHovered]   = ImVec4(0.16f, 0.32f, 0.31f, 0.85f);
+    colours[ImGuiCol_Header]          = theme::toVec4(theme::kAccentFaint);
+    colours[ImGuiCol_HeaderHovered]   = theme::toVec4(theme::kControl);
     colours[ImGuiCol_HeaderActive]    = theme::toVec4(theme::kAccentDim);
 
     colours[ImGuiCol_Separator]       = theme::toVec4(theme::kBorder);

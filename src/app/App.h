@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "app/Config.h"
@@ -108,18 +109,37 @@ public:
     bool takeUpdateAnnouncement(std::string& version);
 
 private:
-    // --- panels -----------------------------------------------------------
-    void renderTopBar();
-    void renderIoPanel();
+    // --- shell ------------------------------------------------------------
+    //
+    // The window is a header, a body and a footer. The body is either the
+    // console - the rack of modules on the left and the selected one opened up
+    // on the right - or the device screen, which is set once and then left
+    // alone and so does not deserve permanent room beside the sound.
+
+    void renderHeader();
+    void renderNotices();
+    void renderRack(ImVec2 size);
+    void renderModuleView(ImVec2 size);
+    void renderFooter();
+    void renderDevicesScreen();
     void renderVirtualCableHint();
-    void renderProcessingPanel();
-    void renderDenoisePanel();
-    void renderGatePanel();
-    void renderCompressorPanel();
-    void renderLimiterPanel();
-    void renderChainPanel();
-    void renderTransportBar();
     void renderPluginBrowser();
+
+    // --- module views, one per kind of rack unit ----------------------------
+    void renderSuppressorView(ImVec2 origin, ImVec2 size);
+    void renderGateView(ImVec2 origin, ImVec2 size);
+    void renderEqualizerView(ImVec2 origin, ImVec2 size);
+    void renderCompressorView(ImVec2 origin, ImVec2 size);
+    void renderLimiterView(ImVec2 origin, ImVec2 size);
+    void renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size);
+
+    /// Samples the meters into the histories the displays scroll through.
+    void sampleHistory();
+
+    /// Hides an embedded plugin editor that was on screen last frame and is
+    /// not this frame. A child window does not disappear on its own when the
+    /// interface stops drawing the area it covers.
+    void syncEmbeddedEditor();
 
     /// Where the scanner looks: the built-in locations, and whatever the user
     /// added on top of them.
@@ -236,6 +256,72 @@ private:
     bool logClearFailed_     = false;
     bool configDirty_        = false;
     double lastSaveTime_     = 0.0;
+
+    /// The device screen replaces the console while it is open.
+    bool showDevices_ = false;
+
+    /// Rack unit opened in the module view: a chain node's id, or
+    /// kLimiterUnit for the output limiter, which sits outside the chain.
+    static constexpr u64 kLimiterUnit = ~u64{0};
+    u64 selectedUnit_ = 0;
+
+    /// Equaliser band the side panel edits.
+    int selectedBand_ = 3;
+
+    /// A plugin's own editor is shown inside the module view unless the user
+    /// asked for the generic parameter list instead.
+    bool pluginShowsParameters_ = false;
+
+    /// Plugin whose editor is embedded right now, and the one that asked to be
+    /// this frame; see syncEmbeddedEditor.
+    host::Vst3Plugin* embeddedPlugin_ = nullptr;
+    host::Vst3Plugin* embeddedWanted_ = nullptr;
+
+    /// Plugin whose editor is about to be created, and how many frames of the
+    /// spinner have gone out for it; see renderPluginView.
+    host::Vst3Plugin* editorOpening_ = nullptr;
+    int               openingFrames_ = 0;
+
+    /// Plugin whose editor could not be docked, so it is not retried every frame.
+    host::Vst3Plugin* embedFailed_ = nullptr;
+
+    /// Where each rack unit is drawn, by node id, easing towards its slot.
+    std::unordered_map<u64, float> unitY_;
+
+    /// What the scrolling displays draw: the last few seconds of the meters,
+    /// sampled at a fixed rate so the scroll speed does not follow the frame
+    /// rate.
+    struct History {
+        static constexpr int kLength = 180;
+        float values[kLength];
+        int   head = 0;
+
+        /// Levels start at silence rather than at 0 dBFS, or the first six
+        /// seconds would show a wall of full scale scrolling away.
+        explicit History(float initial = 0.0f)
+        {
+            for (float& value : values)
+                value = initial;
+        }
+
+        void push(float value)
+        {
+            values[head] = value;
+            head = (head + 1) % kLength;
+        }
+        /// Oldest first: `at(0)` is six seconds ago, `at(kLength - 1)` is now.
+        float at(int index) const { return values[(head + index) % kLength]; }
+        float latest() const { return at(kLength - 1); }
+    };
+
+    History inputHistory_{-120.0f};  ///< dBFS, peak.
+    History outputHistory_{-120.0f}; ///< dBFS, peak.
+    History gateHistory_;      ///< Gain reduction, dB.
+    History gateOpenHistory_;  ///< 1 when open.
+    History compHistory_;      ///< Gain reduction, dB.
+    History limiterHistory_;   ///< Gain reduction, dB.
+    History speechHistory_;    ///< 0..1.
+    double  lastHistorySample_ = 0.0;
 
     /// Node whose parameter list is open in the side panel, or null.
     host::Vst3Plugin* inspectedPlugin_ = nullptr;

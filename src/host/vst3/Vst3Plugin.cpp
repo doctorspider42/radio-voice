@@ -128,6 +128,9 @@ struct Vst3Plugin::Impl {
     IPtr<Vst::IConnectionPoint> controllerConnection;
 
     std::unique_ptr<Vst3EditorWindow> editor;
+    /// The same editor, docked inside the main window. A plugin gets one view
+    /// at a time, so at most one of these two exists.
+    std::unique_ptr<Vst3EditorWindow> embedded;
 
     std::vector<ParameterInfo> parameters;
     /// Guards `parameters` and the controller, which is UI-thread-only but read
@@ -178,6 +181,7 @@ struct Vst3Plugin::Impl {
             editor->close();
             editor.reset();
         }
+        embedded.reset();
 
         if (processor && active.load())
             processor->setProcessing(false);
@@ -702,6 +706,10 @@ bool Vst3Plugin::openEditor(void* ownerWindow)
         return true;
     }
 
+    // Popping out takes the view from the module view; many plugins cannot
+    // serve two at once.
+    impl.embedded.reset();
+
     IPtr<IPlugView> view = owned(impl.controller->createView(Vst::ViewType::kEditor));
     if (!view) {
         RV_INFO("VST3 \"%s\" has no editor of its own; use the parameter list",
@@ -730,11 +738,64 @@ void Vst3Plugin::closeEditor()
         impl_->editor->close();
         impl_->editor.reset();
     }
+    impl_->embedded.reset();
 }
 
 bool Vst3Plugin::isEditorOpen() const
 {
     return impl_->editor && impl_->editor->isOpen();
+}
+
+bool Vst3Plugin::showEmbeddedEditor(void* parentWindow, int x, int y, int areaWidth,
+                                    int areaHeight, int& width, int& height)
+{
+    Impl& impl = *impl_;
+    width = height = 0;
+
+    if (!impl.controller || isEditorOpen())
+        return false;
+
+    if (!impl.embedded) {
+        IPtr<IPlugView> view = owned(impl.controller->createView(Vst::ViewType::kEditor));
+        if (!view)
+            return false;
+
+        auto window = std::make_unique<Vst3EditorWindow>();
+        if (!window->openChild(view, static_cast<HWND>(parentWindow)))
+            return false;
+        impl.embedded = std::move(window);
+    }
+
+    impl.embedded->fit(areaWidth, areaHeight);
+    if (!impl.embedded->viewSize(width, height))
+        return false;
+
+    // Grown past the area some other way - a skin change, a size the plugin
+    // picked for itself: fit it again before giving up on docking it.
+    if (width > areaWidth || height > areaHeight) {
+        impl.embedded->fit(areaWidth, areaHeight, /*force=*/true);
+        if (!impl.embedded->viewSize(width, height))
+            return false;
+    }
+
+    if (width > areaWidth || height > areaHeight) {
+        impl.embedded->hide();
+        return false;
+    }
+
+    impl.embedded->place(x + (areaWidth - width) / 2, y + (areaHeight - height) / 2);
+    return true;
+}
+
+void Vst3Plugin::hideEmbeddedEditor()
+{
+    if (impl_->embedded)
+        impl_->embedded->hide();
+}
+
+bool Vst3Plugin::hasEmbeddedEditor() const
+{
+    return impl_->embedded != nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -947,6 +1008,13 @@ bool Vst3Plugin::hasEditor() const { return false; }
 bool Vst3Plugin::openEditor(void*) { return false; }
 void Vst3Plugin::closeEditor() {}
 bool Vst3Plugin::isEditorOpen() const { return false; }
+bool Vst3Plugin::showEmbeddedEditor(void*, int, int, int, int, int& width, int& height)
+{
+    width = height = 0;
+    return false;
+}
+void Vst3Plugin::hideEmbeddedEditor() {}
+bool Vst3Plugin::hasEmbeddedEditor() const { return false; }
 const std::vector<Vst3Plugin::ParameterInfo>& Vst3Plugin::parameters() const
 {
     return impl_->parameters;

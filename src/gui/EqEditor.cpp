@@ -7,6 +7,7 @@
 #include "core/Strings.h"
 #include "dsp/GraphicEq.h"
 #include "gui/Theme.h"
+#include "gui/Widgets.h"
 
 namespace rv::gui {
 namespace {
@@ -52,7 +53,7 @@ float yToDb(float y, float top, float height)
 } // namespace
 
 bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
-              float sampleRate, ImVec2 size)
+              float sampleRate, ImVec2 size, int* selectedBand)
 {
     ImGui::PushID(id);
 
@@ -63,7 +64,7 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImVec2 max(origin.x + size.x, origin.y + size.y);
 
-    draw->AddRectFilled(origin, max, theme::kBackground, 6.0f);
+    drawInset(draw, origin, max, 10.0f);
     draw->PushClipRect(origin, max, true);
 
     bool changed = false;
@@ -82,7 +83,7 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
         if (kLabelled[i]) {
             const std::string label = formatHz(kGridFrequencies[i]);
             draw->AddText(ImVec2(x + 4, max.y - ImGui::GetTextLineHeight() - 3),
-                          theme::kTextFaint, label.c_str());
+                          theme::kTextGhost, label.c_str());
         }
     }
 
@@ -93,8 +94,8 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
 
         char label[16];
         std::snprintf(label, sizeof(label), "%+.0f", static_cast<double>(db));
-        draw->AddText(ImVec2(origin.x + 4, y - ImGui::GetTextLineHeight() * 0.5f),
-                      theme::kTextFaint, label);
+        draw->AddText(ImVec2(origin.x + 6, y - ImGui::GetTextLineHeight() * 0.5f),
+                      theme::kTextGhost, label);
     }
 
     // ---- spectrum --------------------------------------------------------
@@ -150,7 +151,16 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
             const float db = dsp::GraphicEq::responseDb(params, hz, sampleRate);
             curve[i] = ImVec2(x, dbToY(db, origin.y, size.y));
         }
-        draw->AddPolyline(curve, kCurveResolution, theme::kCurve, 2.2f, ImDrawFlags_None);
+        // A wash between the curve and the zero line, then the curve itself
+        // with a glow: the response is what the eye should land on first.
+        const float zeroY = dbToY(0.0f, origin.y, size.y);
+        for (int i = 0; i + 1 < kCurveResolution; ++i) {
+            const ImVec2& a = curve[i];
+            const ImVec2& b = curve[i + 1];
+            draw->AddQuadFilled(a, b, ImVec2(b.x, zeroY), ImVec2(a.x, zeroY),
+                                theme::withAlpha(theme::kAccentLight, 0.06f));
+        }
+        drawGlowLine(draw, curve, kCurveResolution, theme::kCurve, 2.2f);
     }
 
     // ---- band handles ----------------------------------------------------
@@ -170,8 +180,11 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
         const float distance = std::hypot(mouse.x - centre.x, mouse.y - centre.y);
         const bool  hovered  = canvasHovered && distance < 14.0f;
 
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             draggedBand = band;
+            if (selectedBand)
+                *selectedBand = band;
+        }
 
         if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             params.eqGainDb[band].store(0.0f, std::memory_order_relaxed);
@@ -203,13 +216,30 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
             ImGui::SetTooltip("%s", tooltip);
         }
 
-        const bool  engaged = std::abs(gain) > 0.05f;
-        const ImU32 fill    = (draggedBand == band || hovered) ? theme::kCurve
-                            : engaged                          ? theme::kAccent
-                                                               : theme::kTextFaint;
+        // Numbered handles, so a handle on the curve and its tile under the
+        // display are obviously the same band.
+        const bool  engaged  = std::abs(gain) > 0.05f;
+        const bool  selected = selectedBand && *selectedBand == band;
+        const bool  lit      = draggedBand == band || hovered;
+        const float radius   = selected ? 11.0f : 9.0f;
 
-        draw->AddCircleFilled(centre, hovered ? 7.5f : 6.0f, fill, 20);
-        draw->AddCircle(centre, hovered ? 7.5f : 6.0f, theme::kBackground, 20, 1.5f);
+        if (selected) {
+            draw->AddCircleFilled(centre, radius + 8.0f, theme::withAlpha(theme::kAccentLight, 0.12f), 24);
+            draw->AddCircleFilled(centre, radius, theme::kAccentLight, 24);
+            draw->AddCircle(centre, radius + 2.0f, theme::withAlpha(theme::kAccentLight, 0.5f), 24, 1.5f);
+        } else {
+            draw->AddCircleFilled(centre, radius, IM_COL32(0x0B, 0x13, 0x16, 0xFF), 24);
+            draw->AddCircle(centre, radius, lit       ? theme::kAccentLight
+                                            : engaged ? theme::kAccent
+                                                      : theme::kTextGhost,
+                            24, 1.6f);
+        }
+
+        char number[4];
+        std::snprintf(number, sizeof(number), "%d", band + 1);
+        const ImVec2 numberSize = ImGui::CalcTextSize(number);
+        draw->AddText(ImVec2(centre.x - numberSize.x * 0.5f, centre.y - numberSize.y * 0.5f),
+                      selected ? theme::kBackground : theme::kAccentLight, number);
     }
 
     // ---- high-pass / low-pass markers ------------------------------------
@@ -259,7 +289,6 @@ bool eqEditor(const char* id, Params& params, dsp::SpectrumAnalyzer& spectrum,
     }
 
     draw->PopClipRect();
-    draw->AddRect(origin, max, theme::kBorder, 6.0f);
 
     if (changed)
         params.touch();

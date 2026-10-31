@@ -57,6 +57,22 @@ public:
     void closeEditor();
     bool isEditorOpen() const;
 
+    /// Shows the plugin's own editor as a child of `parentWindow`, centred in
+    /// the area `x`, `y`, `areaWidth` x `areaHeight` (client pixels).
+    ///
+    /// Returns false - and leaves nothing on screen - when the plugin has no
+    /// editor, when it is popped out in its own window, or when it is larger
+    /// than the area. `width` and `height` receive the editor's size whenever
+    /// it is known, so the caller can say why.
+    bool showEmbeddedEditor(void* parentWindow, int x, int y, int areaWidth, int areaHeight,
+                            int& width, int& height);
+
+    /// Takes the embedded editor off screen; it stays attached for next time.
+    void hideEmbeddedEditor();
+
+    /// Whether the docked editor has been created already - the slow part.
+    bool hasEmbeddedEditor() const;
+
     // --- parameters -------------------------------------------------------
     const std::vector<ParameterInfo>& parameters() const;
     double      parameterValue(u32 id) const;

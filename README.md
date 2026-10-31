@@ -21,7 +21,7 @@
   &nbsp;·&nbsp; <a href="https://github.com/doctorspider42/radio-voice/issues">Report a bug</a>
 </p>
 
-![RadioVoice: live spectrum and EQ, microphone controls, and a reorderable processing chain](docs/screenshot.png)
+![RadioVoice: the signal chain as a rack of modules beside the open compressor, with its level history, transfer curve and gain-reduction meter](docs/screenshot.png)
 
 ## A voice chain for every app
 
@@ -32,14 +32,14 @@ any app that accepts a microphone through a virtual audio cable.
 | :--- | :--- |
 | **Clean** | RNNoise neural noise suppression and a gate with lookahead. |
 | **Shape** | Ten-band EQ, high- and low-pass filters, compressor, and output limiter. |
-| **Make it yours** | Drag to reorder built-in effects and VST3 plugins. Open native plugin editors or use the parameter list. |
+| **Make it yours** | Drag to reorder built-in effects and VST3 plugins in the rack. Plugin editors open docked in the window, in a window of their own, or as a parameter list. |
 | **Keep it running** | Monitor through headphones, save your chain and plugin state, and hide the window to the tray while audio keeps flowing. |
 
 ## Get started
 
 1. **Install RadioVoice** from the [latest release](https://github.com/doctorspider42/radio-voice/releases/latest).
 2. **Route your audio.** With [VB-CABLE](https://vb-audio.com/Cable/) installed,
-   choose your microphone as **Input** and `CABLE Input` as **Output** in RadioVoice.
+   click the route in RadioVoice's header and choose your microphone and `CABLE Input`.
 3. **Pick `CABLE Output` as the microphone** in your receiving app. Adjust your
    chain; enable **Monitor** and select your headphones to hear the result.
 

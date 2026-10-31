@@ -149,7 +149,7 @@ What happens on its own:
 
 - the system's default microphone is selected as **input**
 - a virtual cable is selected as **output** if one is installed (`CABLE Input`
-  is preferred); if none is, the I/O panel explains what is missing
+  is preferred); if none is, the device screen explains what is missing
 - processing starts and VST3 plugins are scanned in the background
 - the chain is filled with the noise suppressor, gate, equalizer and compressor
 
@@ -329,11 +329,22 @@ Launching RadioVoice a second time shows the copy already running rather than
 starting another one, so a stray double-click cannot leave two of them fighting
 over the microphone.
 
-A cable is silent by definition, so to hear yourself turn on **Monitor** in the
-top bar and select your headphones under Audio I/O. It starts and stops without
-interrupting what is being sent.
+The window is a rack and a console. The signal chain runs down the left, one
+unit per module, each with a small live display; click a unit to open it on the
+right. The round button on a unit switches it off without taking it out of the
+chain, and dragging a unit moves it. A VST3 plugin opens in the same place with
+its own editor docked inside — **Pop out** puts it in a window of its own, and
+**Parameters** shows a plain list of its controls instead.
 
-- **Bypass all** — passes the raw microphone through, for an A/B comparison
+The microphone and the output have a screen of their own, since they are set
+once and then left alone: click the route in the header (microphone → output)
+to get there, and **Back to console** to return.
+
+A cable is silent by definition, so to hear yourself turn on **Monitor** in the
+header and pick your headphones under *Monitor* on the device screen. It starts
+and stops without interrupting what is being sent.
+
+- **Bypass** — passes the raw microphone through, for an A/B comparison
 - **Mute** — silence on the output
 - settings save themselves; closing the window also saves plugin state
 
@@ -343,15 +354,15 @@ air conditioner — while you are talking, which the gate cannot do. Taking all
 in the chain, and runs at 48 kHz only.
 
 **Gate.** Talk normally and lower the threshold until the **OPEN/SHUT**
-indicator stops flickering between words. Raise `hyst` if it still chatters.
+indicator stops flickering between words. Raise **HYST** if it still chatters.
 
 **Compressor.** Lower the threshold until the **GR** meter shows 3–6 dB on the
-louder syllables. A `ratio` of 3:1 is enough for speech, and `auto makeup`
-evens out the level. Leave **RMS** on: it follows loudness rather than
+louder syllables. A **RATIO** of 3:1 is enough for speech, and **AUTO MAKEUP**
+evens out the level. Leave the detector on **RMS**: it follows loudness rather than
 individual transients, which on speech is what makes it inaudible.
 
-If you have a single microphone in one side of a stereo input, set the input
-fold-down (under the microphone selector) to **Mono (left)** or **Mono (right)**,
+If you have a single microphone in one side of a stereo input, set **Channels**
+under the microphone on the device screen to **Mono (left)** or **Mono (right)**,
 or the voice will come out on one side only.
 
 **Updates.** The cog turns blue when a newer release exists — RadioVoice asks
@@ -368,10 +379,10 @@ the same job. The README has the [longer version](README.md#updating).
 
 ## 6. When something does not work
 
-First stop, always: the **`Log`** button in the top-right corner, or
+First stop, always: **Log**, under the cog in the top-right corner, or
 `%APPDATA%\RadioVoice\radiovoice.log`.
 
-**The INPUT meter does not move while you speak**
+**The IN meter does not move while you speak**
 The application warns when a device is open but delivering nothing. Check that
 the microphone is not muted in Windows sound settings, and that desktop
 applications are allowed microphone access under Privacy.

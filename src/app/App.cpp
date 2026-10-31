@@ -5,6 +5,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -31,47 +32,12 @@ constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
 constexpr const char* kReleasesUrl =
     "https://github.com/doctorspider42/radio-voice/releases";
 
-/// Draws text, shortened with an ellipsis when it will not fit.
-///
-/// Needed wherever a name of unknown length shares a row with controls that
-/// must stay reachable: ImGui neither wraps nor clips inline text, so a long
-/// vendor name would otherwise run underneath the buttons beside it.
-void textFitted(const char* text, float maxWidth)
-{
-    if (maxWidth <= 0.0f)
-        return;
-
-    if (ImGui::CalcTextSize(text).x <= maxWidth) {
-        ImGui::TextUnformatted(text);
-        return;
-    }
-
-    std::string shortened = text;
-    while (!shortened.empty() &&
-           ImGui::CalcTextSize((shortened + "...").c_str()).x > maxWidth)
-        shortened.pop_back();
-
-    shortened += "...";
-    ImGui::TextUnformatted(shortened.c_str());
-
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", text);
-}
-
 /// Configuration is written at most this often while knobs are moving; the
 /// pending state is always flushed on exit.
 constexpr double kSaveIntervalSeconds = 3.0;
 
-const char* backendName(BackendType backend) { return toString(backend); }
-
-ImU32 loadColour(float load)
-{
-    if (load > 0.85f)
-        return theme::kDanger;
-    if (load > 0.6f)
-        return theme::kWarning;
-    return theme::kSignal;
-}
+/// Width of gui::toggleSwitch, for right-aligning one on a row.
+float switchWidth() { return ImGui::GetFrameHeight() * 0.72f * 1.85f; }
 
 } // namespace
 
@@ -86,6 +52,7 @@ void App::setDpiScale(float dpiScale, const gui::Fonts& fonts)
 {
     dpiScale_ = dpiScale > 0.0f ? dpiScale : 1.0f;
     fonts_    = fonts;
+    gui::setWidgetFonts(fonts_);
 }
 
 bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
@@ -94,6 +61,7 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
     mainWindow_ = mainWindow;
     fonts_      = fonts;
     dpiScale_   = dpiScale > 0.0f ? dpiScale : 1.0f;
+    gui::setWidgetFonts(fonts_);
 
     config_ = std::move(loaded);
     config_.applyTo(params_);
@@ -155,6 +123,13 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
     appliedMonitorEnabled_ = config_.monitorEnabled;
 
     buildChainFromConfig();
+
+    // The compressor is where most of the listening happens, so the console
+    // opens on it rather than on whichever module happens to be first.
+    for (const auto& node : chainNodes_) {
+        if (node->kind() == dsp::NodeKind::Compressor)
+            selectedUnit_ = node->id();
+    }
 
     if (config_.autoStart && !config_.output.deviceId.empty())
         startEngine();
@@ -566,6 +541,12 @@ void App::removeNode(size_t index)
         plugin->closeEditor();
         if (inspectedPlugin_ == plugin)
             inspectedPlugin_ = nullptr;
+        if (embeddedPlugin_ == plugin)
+            embeddedPlugin_ = nullptr;
+        if (editorOpening_ == plugin)
+            editorOpening_ = nullptr;
+        if (embedFailed_ == plugin)
+            embedFailed_ = nullptr;
     }
 
     chainNodes_.erase(chainNodes_.begin() + static_cast<std::ptrdiff_t>(index));
@@ -620,379 +601,8 @@ void App::captureChainToConfig()
 }
 
 // ---------------------------------------------------------------------------
-// Rendering
+// Devices
 // ---------------------------------------------------------------------------
-
-void App::render()
-{
-    devices_.refreshIfStale(2000);
-    if (engine_)
-        engine_->updateSlowMeters();
-    engine_->chain().collectGarbage();
-
-    // Both act on what the widgets left in config_ last frame, so they run
-    // before anything is drawn again.
-    syncMonitor();
-    recoverInvalidatedDevice();
-    applyPendingDeviceChange();
-
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(12.0f), px(10.0f)));
-    ImGui::Begin("##root", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
-    ImGui::PopStyleVar(2);
-
-    renderTopBar();
-
-    const float transportHeight = px(108.0f);
-    const float bodyHeight = ImGui::GetContentRegionAvail().y - transportHeight -
-                             ImGui::GetStyle().ItemSpacing.y;
-
-    // Proportional with a floor and a ceiling, not fixed. Fixed side columns
-    // look right at the size they were designed for and squeeze the centre to
-    // nothing on a smaller window - which is where the EQ and the dynamics
-    // panels live, so it is the worst place to lose room.
-    const float totalWidth = ImGui::GetContentRegionAvail().x;
-
-    // Same treatment as the chain, mirrored: once the devices are set they are
-    // rarely touched again, so the column holding them is worth reclaiming
-    // while working on the sound.
-    const float leftWidth = config_.ioCollapsed
-                                ? px(34.0f)
-                                : std::clamp(totalWidth * 0.23f, px(250.0f), px(340.0f));
-
-    // Folded away, the chain keeps just enough width for the button that brings
-    // it back; everything it gives up goes to the centre column.
-    const float rightWidth = config_.chainCollapsed
-                                 ? px(34.0f)
-                                 : std::clamp(totalWidth * 0.24f, px(260.0f), px(360.0f));
-
-    const float centreWidth = totalWidth - leftWidth - rightWidth -
-                              ImGui::GetStyle().ItemSpacing.x * 2;
-
-    ImGui::BeginChild("##left", ImVec2(leftWidth, bodyHeight), ImGuiChildFlags_Borders);
-    renderIoPanel();
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-    ImGui::BeginChild("##centre", ImVec2(centreWidth, bodyHeight), ImGuiChildFlags_None);
-    renderProcessingPanel();
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-    ImGui::BeginChild("##right", ImVec2(rightWidth, bodyHeight), ImGuiChildFlags_Borders);
-    renderChainPanel();
-    ImGui::EndChild();
-
-    renderTransportBar();
-
-    ImGui::End();
-
-    if (showPluginBrowser_)
-        renderPluginBrowser();
-    if (showLog_)
-        renderLogWindow();
-
-    saveIfDirty();
-}
-
-void App::renderTopBar()
-{
-    const auto status = engine_->status();
-    const bool running = engine_->isRunning();
-
-    const float titleY = ImGui::GetCursorPosY();
-
-    ImGui::PushFont(fonts_.heading, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kText));
-    ImGui::TextUnformatted("RadioVoice");
-    const float titleHeight = ImGui::GetItemRectSize().y;
-    ImGui::PopStyleColor();
-    ImGui::PopFont();
-
-    // The build number rides on the title's baseline, small and faint: there
-    // for whoever is about to report something, quiet the rest of the time.
-    ImGui::SameLine(0, 6);
-    ImGui::SetCursorPosY(titleY + titleHeight - ImGui::GetTextLineHeight());
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-    ImGui::Text("v%s", RV_VERSION);
-    ImGui::PopStyleColor();
-
-    ImGui::SameLine(0, 16);
-    ImGui::SetCursorPosY(titleY);
-    if (running)
-        statusPill("RUNNING", theme::kSignal);
-    else if (!startupError_.empty())
-        statusPill("ERROR", theme::kDanger);
-    else
-        statusPill("STOPPED", theme::kTextDim);
-
-    if (running) {
-        ImGui::SameLine(0, 16);
-        char text[128];
-
-        std::snprintf(text, sizeof(text), "%.1f ms",
-                      static_cast<double>(meters_.latencyMs.load()));
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextUnformatted("latency");
-        ImGui::PopStyleColor();
-        ImGui::SameLine(0, 5);
-        ImGui::TextUnformatted(text);
-
-        // A single number never explains itself, and here one term almost
-        // always dominates the rest - usually the clock bridge, which no amount
-        // of adding or removing plugins will move.
-        if (ImGui::IsItemHovered()) {
-            const auto parts = engine_->latencyBreakdown();
-            ImGui::SetTooltip(
-                "input device    %5.1f ms\n"
-                "clock bridge    %5.1f ms\n"
-                "chain           %5.1f ms\n"
-                "limiter         %5.1f ms\n"
-                "output device   %5.1f ms\n"
-                "                ------\n"
-                "total           %5.1f ms\n"
-                "\n"
-                "The clock bridge is the buffer that lets the capture and\n"
-                "playback devices run on their own clocks. It is sized from\n"
-                "the device period, so exclusive mode - or a smaller period in\n"
-                "Windows sound settings - is what shrinks it.\n"
-                "\n"
-                "Shared-mode drivers often report zero device latency, so the\n"
-                "true figure is somewhat higher than this.",
-                static_cast<double>(parts.inputDevice),
-                static_cast<double>(parts.bridge),
-                static_cast<double>(parts.chain),
-                static_cast<double>(parts.limiter),
-                static_cast<double>(parts.outputDevice),
-                static_cast<double>(parts.total()));
-        }
-
-        ImGui::SameLine(0, 18);
-        const float load = meters_.cpuLoad.load();
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextUnformatted("dsp");
-        ImGui::PopStyleColor();
-        ImGui::SameLine(0, 5);
-        std::snprintf(text, sizeof(text), "%.0f%%", static_cast<double>(load * 100.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(loadColour(load)));
-        ImGui::TextUnformatted(text);
-        ImGui::PopStyleColor();
-
-        const u32 xruns = meters_.inputXruns.load() + meters_.outputXruns.load();
-        ImGui::SameLine(0, 18);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextUnformatted("dropouts");
-        ImGui::PopStyleColor();
-        ImGui::SameLine(0, 5);
-        std::snprintf(text, sizeof(text), "%u", xruns);
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              theme::toVec4(xruns > 0 ? theme::kWarning : theme::kTextDim));
-        ImGui::TextUnformatted(text);
-        ImGui::PopStyleColor();
-
-        ImGui::SameLine(0, 18);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextUnformatted("drift");
-        ImGui::PopStyleColor();
-        ImGui::SameLine(0, 5);
-        std::snprintf(text, sizeof(text), "%+.0f ppm",
-                      static_cast<double>(meters_.driftPpm.load()));
-        ImGui::TextUnformatted(text);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "Correction applied to keep the capture and playback clocks aligned.\n"
-                "A steady value of a few dozen ppm is normal for two separate devices.");
-        }
-    }
-
-    // Right-aligned controls.
-    {
-        const float monitorWidth = px(92.0f);
-        const float buttonWidth  = px(84.0f);
-        const float restartWidth = px(84.0f);
-        const float gearWidth    = ImGui::GetFrameHeight();
-        const float spacing      = ImGui::GetStyle().ItemSpacing.x;
-
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
-                             monitorWidth - buttonWidth - restartWidth - gearWidth -
-                             spacing * 3);
-
-        // Monitoring is the one routing decision an operator changes mid-take -
-        // headphones on to check a plugin, off again when it feeds back - so it
-        // belongs next to Start rather than three sections down the panel.
-        {
-            const auto status = engine_->status();
-            const bool lit    = config_.monitorEnabled;
-            const bool failed = lit && running && !status.monitorError.empty();
-
-            // Lit when monitoring, red when it was asked for and could not be
-            // opened. An unlit button keeps the default style rather than a
-            // third colour, so "on" is the only state that draws the eye.
-            int pushed = 0;
-            if (failed) {
-                ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kDanger));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toVec4(theme::kDanger));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::toVec4(theme::kDanger));
-                pushed = 3;
-            } else if (lit) {
-                ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kAccentDim));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toVec4(theme::kAccent));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::toVec4(theme::kAccentFaint));
-                pushed = 3;
-            }
-
-            if (ImGui::Button("Monitor", ImVec2(monitorWidth, 0))) {
-                config_.monitorEnabled = !config_.monitorEnabled;
-                if (config_.monitorEnabled)
-                    ensureMonitorDevice();
-                markDirty();
-            }
-
-            if (pushed)
-                ImGui::PopStyleColor(pushed);
-
-            if (ImGui::IsItemHovered()) {
-                if (failed) {
-                    ImGui::SetTooltip("Monitoring is on but the device could not be "
-                                      "opened:\n%s", status.monitorError.c_str());
-                } else if (config_.monitor.deviceName.empty()) {
-                    ImGui::SetTooltip("Hear the processed signal on a second device.\n"
-                                      "Pick one under Audio I/O.");
-                } else {
-                    ImGui::SetTooltip("Hear the processed signal on \"%s\".\n"
-                                      "Takes effect immediately - no restart.",
-                                      config_.monitor.deviceName.c_str());
-                }
-            }
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button(running ? "Stop" : "Start", ImVec2(buttonWidth, 0))) {
-            if (running)
-                stopEngine();
-            else
-                startEngine();
-        }
-
-        // Always present, not only when a setting changed. Restarting the
-        // stream is the first thing to try for anything that sounds wrong, and
-        // hiding it behind a condition means it is missing exactly when it is
-        // wanted.
-        ImGui::SameLine();
-        if (ImGui::Button("Restart", ImVec2(restartWidth, 0)))
-            restartEngine();
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Stops and reopens both audio devices.");
-
-        // Everything that is set once and then forgotten - the log, the version,
-        // and where the window goes when it is dismissed - lives behind the cog.
-        // The transport bar is read at a glance while talking, and more words of
-        // chrome there cost more than the click they save.
-        ImGui::SameLine();
-        const int  problems = log::problemCount();
-        const auto update   = updater_.status();
-        const bool open     = ImGui::IsPopupOpen("##options");
-
-        // Two things can want attention through one cog, so they are ranked
-        // rather than blended: something went wrong beats something is
-        // available, and the tooltip says which it is either way.
-        const bool waitingUpdate = update.state == Updater::State::Available ||
-                                   update.state == Updater::State::Downloading ||
-                                   update.state == Updater::State::Ready;
-
-        const ImU32 gearTint = problems > 0     ? theme::kWarning
-                               : waitingUpdate  ? theme::kAccent
-                                                : theme::kTextDim;
-
-        if (gearButton("##options-button", gearWidth, gearTint, open))
-            ImGui::OpenPopup("##options");
-
-        if (ImGui::IsItemHovered()) {
-            char note[192];
-            int  written = std::snprintf(note, sizeof(note),
-                                         "Options - the log, the version, and where "
-                                         "the window goes.");
-
-            if (problems > 0) {
-                written += std::snprintf(note + written, sizeof(note) - written,
-                                         "\n%d problem%s logged.", problems,
-                                         problems == 1 ? "" : "s");
-            }
-            if (update.state == Updater::State::Ready) {
-                std::snprintf(note + written, sizeof(note) - written,
-                              "\nVersion %s is ready to install.", update.version.c_str());
-            } else if (update.state == Updater::State::Available) {
-                std::snprintf(note + written, sizeof(note) - written,
-                              "\nVersion %s has been released.", update.version.c_str());
-            }
-
-            ImGui::SetTooltip("%s", note);
-        }
-
-        // Constrained because the update section inside can carry a paragraph of
-        // release notes, and an auto-sized popup holding one is either a column
-        // of single words or the width of the screen.
-        //
-        // The height matters for a different reason: a popup that fits itself to
-        // its contents is not clamped to the display, and this menu has grown
-        // long enough that on a small screen at 200% scale its last section -
-        // which is the one holding a switch someone came here to find - would
-        // simply be off the bottom. Bounded, it scrolls instead.
-        const float maxHeight =
-            std::max(px(240.0f), ImGui::GetMainViewport()->WorkSize.y - px(90.0f));
-
-        ImGui::SetNextWindowSizeConstraints(ImVec2(px(330.0f), 0.0f),
-                                            ImVec2(px(420.0f), maxHeight));
-        if (ImGui::BeginPopup("##options")) {
-            renderOptionsMenu();
-            ImGui::EndPopup();
-        }
-    }
-
-    if (!startupError_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
-        ImGui::TextWrapped("%s", startupError_.c_str());
-        ImGui::PopStyleColor();
-
-        // The error message is the thing most worth pasting somewhere, and
-        // ImGui text cannot be selected with the mouse.
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("click to copy");
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-                ImGui::SetClipboardText(startupError_.c_str());
-        }
-    }
-
-    if (running && meters_.inputStarved.load()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-        ImGui::TextWrapped(
-            "\"%s\" is open but is not delivering any audio. Check that the device is "
-            "not muted or disabled in Windows sound settings, and - for a virtual "
-            "microphone - that the application driving it is actually running.",
-            config_.input.deviceName.c_str());
-        ImGui::PopStyleColor();
-    }
-
-    if (running && deviceSelectionDiffers()) {
-        // Reports rather than instructs: the restart is already on its way, and
-        // asking for a click that is about to become unnecessary is worse than
-        // saying nothing. Kept visible because the stream does drop out for a
-        // moment, and unexplained silence is alarming.
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
-        ImGui::TextUnformatted("Device settings changed - reopening the stream...");
-        ImGui::PopStyleColor();
-    }
-
-    ImGui::Separator();
-}
 
 void App::ensureMonitorDevice()
 {
@@ -1132,20 +742,32 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
 {
     ImGui::PushID(label);
 
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
-    ImGui::TextUnformatted(label);
-    ImGui::PopStyleColor();
+    if (label && *label) {
+        std::string caps = label;
+        for (char& c : caps)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        capsLabel(caps.c_str(), theme::kTextDim);
+        ImGui::Spacing();
+    }
 
     // --- backend ----------------------------------------------------------
-    const BackendType backends[] = {BackendType::Wasapi, BackendType::DirectSound,
-                                    BackendType::Asio};
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##backend", backendName(device.backend))) {
-        for (BackendType backend : backends) {
-            if (backend == BackendType::Asio && !allowAsio)
-                continue;
-            const bool selected = backend == device.backend;
-            if (ImGui::Selectable(backendName(backend), selected) && !selected) {
+    // A segmented control rather than a list: there are never more than three,
+    // and seeing all of them at once is what tells someone ASIO is an option.
+    BackendType backends[3] = {BackendType::Wasapi, BackendType::DirectSound,
+                               BackendType::Asio};
+    const char* backendLabels[3] = {"WASAPI", "DIRECTSOUND", "ASIO"};
+    const int   backendCount     = allowAsio ? 3 : 2;
+
+    int current = 0;
+    for (int i = 0; i < backendCount; ++i) {
+        if (backends[i] == device.backend)
+            current = i;
+    }
+
+    if (segmented("##backend", backendLabels, backendCount, &current)) {
+        {
+            const BackendType backend = backends[current];
+            {
                 device.backend = backend;
 
                 // Pick a device for the new backend straight away rather than
@@ -1185,58 +807,106 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
                 markDirty();
             }
         }
-        ImGui::EndCombo();
     }
+
+    ImGui::Spacing();
 
     // --- device -----------------------------------------------------------
     const auto list = isInput ? devices_.inputs(device.backend)
                               : devices_.outputs(device.backend);
 
-    std::string preview = device.deviceName.empty() ? "(select a device)" : device.deviceName;
-
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##device", preview.c_str())) {
-        if (list.empty())
-            ImGui::TextDisabled("no devices for this backend");
-
-        for (const auto& info : list) {
-            std::string entry = info.name;
-            if (info.isDefault)
-                entry += "   (default)";
-            if (info.isVirtualCable)
-                entry += "   [virtual cable]";
-
-            const bool selected = info.id == device.deviceId;
-            const bool usable   = info.usable();
-
-            if (!usable)
-                ImGui::BeginDisabled();
-
-            if (ImGui::Selectable(entry.c_str(), selected)) {
-                device.deviceId   = info.id;
-                device.deviceName = info.name;
-                if (info.defaultSampleRate > 0)
-                    device.sampleRate = info.defaultSampleRate;
-                markDirty();
-            }
-
-            if (!usable) {
-                ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("%s", info.unavailableReason.c_str());
-            }
-        }
-        ImGui::EndCombo();
+    // Every device on its own row rather than inside a drop-down. This screen
+    // exists to choose one, there is room to show them all, and a closed list
+    // hides exactly the comparison the choice depends on.
+    if (list.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
+        ImGui::TextUnformatted("no devices for this backend");
+        ImGui::PopStyleColor();
     }
+
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rowHeight = ImGui::GetFrameHeight() * 1.55f;
+
+    for (const auto& info : list) {
+        ImGui::PushID(info.id.c_str());
+
+        const bool selected = info.id == device.deviceId;
+        const bool usable   = info.usable();
+
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        const ImVec2 rowMax(rowMin.x + ImGui::GetContentRegionAvail().x, rowMin.y + rowHeight);
+
+        if (!usable)
+            ImGui::BeginDisabled();
+        if (ImGui::InvisibleButton("##row", ImVec2(rowMax.x - rowMin.x, rowHeight)) && !selected) {
+            device.deviceId   = info.id;
+            device.deviceName = info.name;
+            if (info.defaultSampleRate > 0)
+                device.sampleRate = info.defaultSampleRate;
+            markDirty();
+        }
+        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        if (!usable) {
+            ImGui::EndDisabled();
+            if (hovered)
+                ImGui::SetTooltip("%s", info.unavailableReason.c_str());
+        }
+
+        draw->AddRectFilled(rowMin, rowMax,
+                            selected  ? theme::withAlpha(theme::kAccent, 0.07f)
+                            : hovered ? theme::kControl
+                                      : theme::kPanelRaised,
+                            9.0f);
+        draw->AddRect(rowMin, rowMax,
+                      selected ? theme::withAlpha(theme::kAccent, 0.55f) : theme::kBorder, 9.0f);
+
+        const float  radio = rowHeight * 0.16f;
+        const ImVec2 dot(rowMin.x + rowHeight * 0.42f, rowMin.y + rowHeight * 0.5f);
+        draw->AddCircle(dot, radio, selected ? theme::kAccent : theme::kBorderBright, 20, 2.0f);
+        if (selected)
+            draw->AddCircleFilled(dot, radio * 0.45f, theme::kAccent, 12);
+
+        const float textX = dot.x + rowHeight * 0.42f;
+        const float lineH = ImGui::GetTextLineHeight();
+        draw->PushClipRect(rowMin, ImVec2(rowMax.x - rowHeight * 2.2f, rowMax.y), true);
+        draw->AddText(ImVec2(textX, rowMin.y + rowHeight * 0.5f - lineH * 0.95f),
+                      usable ? theme::kText : theme::kTextFaint, info.name.c_str());
+        draw->PopClipRect();
+
+        char meta[64];
+        std::snprintf(meta, sizeof(meta), "%d Hz%s", info.defaultSampleRate,
+                      info.isDefault ? " - default" : "");
+        ImGui::PushFont(fonts_.small, fonts_.small->LegacySize);
+        draw->AddText(ImVec2(textX, rowMin.y + rowHeight * 0.5f + lineH * 0.05f),
+                      theme::kTextFaint, info.defaultSampleRate > 0 ? meta : (info.isDefault ? "default" : ""));
+        ImGui::PopFont();
+
+        if (info.isVirtualCable) {
+            ImGui::PushFont(fonts_.caps, fonts_.caps->LegacySize);
+            const char* tag = "VIRTUAL CABLE";
+            const float width = spacedTextWidth(tag, 1.2f) + 16.0f;
+            const ImVec2 tagMin(rowMax.x - width - 10.0f, rowMin.y + rowHeight * 0.5f - 10.0f);
+            const ImVec2 tagMax(rowMax.x - 10.0f, rowMin.y + rowHeight * 0.5f + 10.0f);
+            draw->AddRectFilled(tagMin, tagMax, theme::withAlpha(theme::kAccent, 0.12f), 10.0f);
+            drawSpacedText(draw, ImVec2(tagMin.x + 8.0f, tagMin.y + (20.0f - fonts_.caps->LegacySize) * 0.5f),
+                           theme::kAccentLight, tag, 1.2f);
+            ImGui::PopFont();
+        }
+
+        ImGui::PopID();
+        ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    }
+
+    ImGui::Spacing();
 
     // --- mode and rate ----------------------------------------------------
     if (device.backend == BackendType::Wasapi) {
         bool exclusive = device.wasapiMode == WasapiMode::Exclusive;
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextUnformatted("exclusive mode");
+        ImGui::TextUnformatted("Exclusive mode");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - switchWidth());
         if (toggleSwitch("exclusive", &exclusive)) {
             device.wasapiMode = exclusive ? WasapiMode::Exclusive : WasapiMode::Shared;
             markDirty();
@@ -1253,6 +923,7 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
     char rateText[32];
     std::snprintf(rateText, sizeof(rateText), "%d Hz", device.sampleRate);
 
+    capsLabel("SAMPLE RATE");
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##rate", rateText)) {
         for (int rate : rates) {
@@ -1267,251 +938,6 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
     }
 
     ImGui::PopID();
-}
-
-void App::renderIoPanel()
-{
-    // ---- folded away -----------------------------------------------------
-    if (config_.ioCollapsed) {
-        const float strip = ImGui::GetContentRegionAvail().x;
-
-        if (ImGui::Button(">", ImVec2(-1.0f, 0.0f))) {
-            config_.ioCollapsed = false;
-            markDirty();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Show the audio devices");
-
-        ImGui::Spacing();
-
-        ImGui::PushFont(fonts_.small, 0.0f);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        for (const char* c = "AUDIO"; *c; ++c) {
-            const char letter[2] = {*c, '\0'};
-            const float width = ImGui::CalcTextSize(letter).x;
-            ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - width) * 0.5f);
-            ImGui::TextUnformatted(letter);
-        }
-        ImGui::PopStyleColor();
-
-        // The one fact worth keeping visible while the panel is away: what rate
-        // the stream actually negotiated. It is the number that explains a
-        // surprise, and it is two characters wide.
-        const auto status = engine_->status();
-        if (status.running && status.outputSampleRate > 0.0) {
-            ImGui::Spacing();
-            char rate[8];
-            std::snprintf(rate, sizeof(rate), "%.0fk", status.outputSampleRate / 1000.0);
-            const float rateWidth = ImGui::CalcTextSize(rate).x;
-            ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - rateWidth) * 0.5f);
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kAccent));
-            ImGui::TextUnformatted(rate);
-            ImGui::PopStyleColor();
-        }
-        ImGui::PopFont();
-
-        return;
-    }
-
-    // ---- expanded --------------------------------------------------------
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted("Audio I/O");
-    ImGui::PopFont();
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(24.0f));
-    if (ImGui::Button("<", ImVec2(px(24.0f), 0))) {
-        config_.ioCollapsed = true;
-        markDirty();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Fold the audio devices away");
-
-    ImGui::Spacing();
-
-    renderDeviceSelector("Microphone", config_.input, true);
-
-    // --- input fold-down --------------------------------------------------
-    // Sits with the input device because it is a property of how that device is
-    // read, not of the processing. The common case it exists for: an interface
-    // presenting two channels with a single microphone on the first, where
-    // taking both gives a voice on one side and silence on the other.
-    {
-        const InputMix modes[] = {InputMix::Stereo, InputMix::MonoLeft,
-                                  InputMix::MonoRight, InputMix::MonoSum};
-        auto current = static_cast<InputMix>(params_.inputMix.load());
-
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::BeginCombo("##inputmix", toString(current))) {
-            for (InputMix mode : modes) {
-                if (ImGui::Selectable(toString(mode), mode == current)) {
-                    params_.inputMix.store(static_cast<int>(mode));
-                    markDirty();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "How the capture device's channels are folded into the chain.\n"
-                "Pick a single channel when one microphone is plugged into a\n"
-                "stereo input; summing both would halve its level.");
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    renderDeviceSelector("Output", config_.output, false);
-
-    {
-        bool mono = params_.monoOutput.load();
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextUnformatted("mono output");
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
-        if (toggleSwitch("monoOut", &mono)) {
-            params_.monoOutput.store(mono);
-            markDirty();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Sums the processed signal to mono before it reaches the\n"
-                              "output device, so both channels carry the same audio.");
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // --- monitor ----------------------------------------------------------
-    // A virtual cable cannot be listened to - that is what makes it a cable.
-    // This is the second render device that carries the same signal, so the
-    // operator hears what is being sent while it is being sent.
-    {
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
-        ImGui::TextUnformatted("Monitor");
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
-
-        bool enabled = config_.monitorEnabled;
-        if (toggleSwitch("monitorOn", &enabled)) {
-            config_.monitorEnabled = enabled;
-            if (enabled)
-                ensureMonitorDevice();
-            markDirty();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "A second output carrying the same processed signal.\n"
-                "Sending to a virtual cable is silent by design; this is how\n"
-                "you hear yourself while it happens.\n"
-                "Starts and stops immediately - the main path is untouched.");
-        }
-
-        if (config_.monitorEnabled) {
-            ImGui::Spacing();
-            renderDeviceSelector("Monitor device", config_.monitor, false,
-                                 /*allowAsio=*/false);
-
-            float gainDb = params_.monitorGainDb.load();
-            ImGui::SetNextItemWidth(-1);
-            if (ImGui::SliderFloat("##monitorgain", &gainDb, -60.0f, 12.0f, "%+.1f dB")) {
-                params_.monitorGainDb.store(gainDb);
-                markDirty();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Headphone level. Affects only what you hear -\n"
-                                  "the signal being sent onwards is untouched.");
-            }
-
-            bool monitorMuted = params_.monitorMute.load();
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-            ImGui::TextUnformatted("mute monitor");
-            ImGui::PopStyleColor();
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                 ImGui::GetContentRegionAvail().x - px(34.0f));
-            if (toggleSwitch("monitorMute", &monitorMuted)) {
-                params_.monitorMute.store(monitorMuted);
-                markDirty();
-            }
-
-            const auto monitorStatus = engine_->status();
-            if (!monitorStatus.monitorError.empty()) {
-                ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-                ImGui::TextWrapped("monitor: %s", monitorStatus.monitorError.c_str());
-                ImGui::PopStyleColor();
-            }
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // --- block size -------------------------------------------------------
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
-    ImGui::TextUnformatted("Processing block");
-    ImGui::PopStyleColor();
-
-    const int blockSizes[] = {64, 128, 256, 512, 1024};
-    char blockText[32];
-    std::snprintf(blockText, sizeof(blockText), "%d samples", config_.maxBlockFrames);
-
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##block", blockText)) {
-        for (int size : blockSizes) {
-            char text[32];
-            std::snprintf(text, sizeof(text), "%d samples", size);
-            if (ImGui::Selectable(text, size == config_.maxBlockFrames)) {
-                config_.maxBlockFrames = size;
-                markDirty();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Largest block handed to plugins.\n"
-                          "Smaller reacts faster; larger is easier on the CPU.");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // --- live status ------------------------------------------------------
-    const auto status = engine_->status();
-    if (status.running) {
-        char text[96];
-
-        std::snprintf(text, sizeof(text), "%.0f Hz / %d ch",
-                      status.inputSampleRate, status.inputChannels);
-        infoRow("capture", text, theme::kTextDim);
-
-        infoRow("format", status.inputFormat.c_str(), theme::kTextDim);
-
-        std::snprintf(text, sizeof(text), "%d frames", status.inputBufferFrames);
-        infoRow("buffer", text, theme::kTextDim);
-
-        ImGui::Spacing();
-
-        std::snprintf(text, sizeof(text), "%.0f Hz / %d ch",
-                      status.outputSampleRate, status.outputChannels);
-        infoRow("render", text, theme::kTextDim);
-
-        infoRow("format", status.outputFormat.c_str(), theme::kTextDim);
-
-        std::snprintf(text, sizeof(text), "%d frames", status.outputBufferFrames);
-        infoRow("buffer", text, theme::kTextDim);
-    } else {
-        ImGui::TextDisabled("audio stopped");
-    }
-
-    ImGui::Spacing();
-    renderVirtualCableHint();
 }
 
 void App::renderVirtualCableHint()
@@ -1563,747 +989,6 @@ void App::renderVirtualCableHint()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Processing panel
-// ---------------------------------------------------------------------------
-
-void App::renderProcessingPanel()
-{
-    // Two knob rows plus the checkbox row the compressor adds. Knobs wrap onto
-    // further rows on a narrow window, so this is a floor rather than an exact
-    // fit - the panels scroll if a very narrow window pushes them past it.
-    const float dynamicsHeight = px(305.0f);
-
-    // One row: a switch, a slider and a speech indicator. Small on purpose -
-    // the suppressor has one control worth having, and giving it a panel the
-    // size of the compressor's would imply otherwise.
-    const float denoiseHeight = ImGui::GetFrameHeight() * 2.0f +
-                                ImGui::GetStyle().ItemSpacing.y +
-                                ImGui::GetStyle().WindowPadding.y * 2.0f;
-
-    // The equaliser takes what is left once the other two have been accounted
-    // for. Both of their heights are subtracted up front rather than measuring
-    // the remaining space after drawing them, so the order they appear in can
-    // change without the arithmetic quietly following it.
-    const float eqHeight = ImGui::GetContentRegionAvail().y - denoiseHeight -
-                           dynamicsHeight - ImGui::GetStyle().ItemSpacing.y * 2.0f;
-
-    ImGui::BeginChild("##eq", ImVec2(0, eqHeight), ImGuiChildFlags_Borders);
-    {
-        bool eqEnabled = params_.eqEnabled.load();
-        ImGui::PushFont(fonts_.medium, 0.0f);
-        ImGui::TextUnformatted("Equalizer");
-        ImGui::PopFont();
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
-        if (toggleSwitch("eqEnable", &eqEnabled)) {
-            params_.eqEnabled.store(eqEnabled);
-            params_.touch();
-            markDirty();
-        }
-
-        bool hpf = params_.hpfEnabled.load();
-        bool lpf = params_.lpfEnabled.load();
-        if (ImGui::Checkbox("High-pass", &hpf)) {
-            params_.hpfEnabled.store(hpf);
-            params_.touch();
-            markDirty();
-        }
-        ImGui::SameLine(0, 16);
-        if (ImGui::Checkbox("Low-pass", &lpf)) {
-            params_.lpfEnabled.store(lpf);
-            params_.touch();
-            markDirty();
-        }
-        ImGui::SameLine(0, 16);
-        ImGui::TextDisabled("drag handles - wheel over a handle sets Q");
-
-        const ImVec2 available = ImGui::GetContentRegionAvail();
-        const float curveHeight = available.y - px(96.0f);
-
-        if (eqEditor("eqCurve", params_, engine_->inputSpectrum(),
-                     static_cast<float>(currentSampleRate()),
-                     ImVec2(available.x, std::max(120.0f, curveHeight)))) {
-            markDirty();
-        }
-
-        // Band sliders under the curve, aligned to it.
-        ImGui::Spacing();
-        const float bandWidth = available.x / kEqBands;
-        for (int band = 0; band < kEqBands; ++band) {
-            ImGui::PushID(band);
-            if (band > 0)
-                ImGui::SameLine();
-
-            ImGui::BeginGroup();
-            float gain = params_.eqGainDb[band].load();
-            ImGui::SetNextItemWidth(bandWidth - ImGui::GetStyle().ItemSpacing.x);
-            if (ImGui::SliderFloat("##band", &gain, -18.0f, 18.0f, "%+.1f")) {
-                params_.eqGainDb[band].store(gain);
-                params_.touch();
-                markDirty();
-            }
-            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                params_.eqGainDb[band].store(0.0f);
-                params_.touch();
-                markDirty();
-            }
-
-            const std::string label = formatHz(kEqCenters[band]);
-            const float labelWidth = ImGui::CalcTextSize(label.c_str()).x;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                 (bandWidth - labelWidth) * 0.5f - 4.0f);
-            ImGui::TextDisabled("%s", label.c_str());
-            ImGui::EndGroup();
-
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndChild();
-
-    ImGui::BeginChild("##denoise", ImVec2(0, denoiseHeight), ImGuiChildFlags_Borders);
-    renderDenoisePanel();
-    ImGui::EndChild();
-
-    ImGui::BeginChild("##dynamics", ImVec2(0, 0), ImGuiChildFlags_None);
-    {
-        const float spacing   = ImGui::GetStyle().ItemSpacing.x;
-        const float available = ImGui::GetContentRegionAvail().x;
-
-        // Three panels abreast need roughly this much to show their knobs
-        // without wrapping them into a scrollbar. Below it the limiter - the
-        // smallest of the three - drops to its own full-width row underneath.
-        const float kThreeColumnMinimum = px(660.0f);
-
-        if (available >= kThreeColumnMinimum) {
-            const float usable = available - spacing * 2;
-
-            // The gate and the compressor carry four knobs per row each, so
-            // they get near-equal width. Making the gate narrower is what
-            // pushes its fourth knob onto a third row and starts the panel
-            // scrolling, hiding controls that had room a moment earlier.
-            ImGui::BeginChild("##gate", ImVec2(usable * 0.39f, 0), ImGuiChildFlags_Borders);
-            renderGatePanel();
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-            ImGui::BeginChild("##comp", ImVec2(usable * 0.40f, 0), ImGuiChildFlags_Borders);
-            renderCompressorPanel();
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-            ImGui::BeginChild("##limiter", ImVec2(0, 0), ImGuiChildFlags_Borders);
-            renderLimiterPanel();
-            ImGui::EndChild();
-        } else {
-            const float usable    = available - spacing;
-            const float topHeight = ImGui::GetContentRegionAvail().y * 0.62f;
-
-            ImGui::BeginChild("##gate", ImVec2(usable * 0.46f, topHeight),
-                              ImGuiChildFlags_Borders);
-            renderGatePanel();
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-            ImGui::BeginChild("##comp", ImVec2(0, topHeight), ImGuiChildFlags_Borders);
-            renderCompressorPanel();
-            ImGui::EndChild();
-
-            ImGui::BeginChild("##limiter", ImVec2(0, 0), ImGuiChildFlags_Borders);
-            renderLimiterPanel();
-            ImGui::EndChild();
-        }
-    }
-    ImGui::EndChild();
-}
-
-void App::renderDenoisePanel()
-{
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted("Noise Suppressor");
-    ImGui::PopFont();
-
-    // Whether the model is actually running is not something to leave the user
-    // to infer from the sound. A build without it, or a stream at the wrong
-    // rate, says so here rather than offering a switch that does nothing.
-    const dsp::NoiseSuppressor* module = nullptr;
-    for (const auto& node : chainNodes_) {
-        if (node->kind() == dsp::NodeKind::NoiseSuppressor) {
-            module = static_cast<const dsp::NoiseSuppressor*>(node.get());
-            break;
-        }
-    }
-
-    const bool unavailable = module && !module->isActive();
-
-    if (unavailable) {
-        ImGui::SameLine();
-        ImGui::PushFont(fonts_.small, 0.0f);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kWarning));
-        ImGui::TextUnformatted("  unavailable");
-        ImGui::PopStyleColor();
-        ImGui::PopFont();
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", module->inactiveReason().c_str());
-    } else {
-        // Speech probability straight from the model, which is the one number
-        // that says whether it is hearing what it is supposed to.
-        const float speech = meters_.speechProbability.load();
-        ImGui::SameLine();
-        ImGui::PushFont(fonts_.small, 0.0f);
-        ImGui::PushStyleColor(
-            ImGuiCol_Text,
-            theme::toVec4(speech > 0.5f ? theme::kSignal : theme::kTextFaint));
-        ImGui::Text("  speech %.0f%%", static_cast<double>(speech * 100.0f));
-        ImGui::PopStyleColor();
-        ImGui::PopFont();
-    }
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
-
-    bool enabled = params_.denoiseEnabled.load();
-    if (unavailable)
-        ImGui::BeginDisabled();
-    if (toggleSwitch("denoiseEnable", &enabled)) {
-        params_.denoiseEnabled.store(enabled);
-        markDirty();
-    }
-
-    float amount = params_.denoiseAmount.load() * 100.0f;
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##denoiseAmount", &amount, 0.0f, 100.0f, "%.0f%% suppression")) {
-        params_.denoiseAmount.store(amount * 0.01f);
-        markDirty();
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "How much of the cleaned signal replaces the original.\n"
-            "Unlike the gate, this removes steady noise while you are talking -\n"
-            "but taking all of it can sound processed in a quiet room, so\n"
-            "leaving a little of the original in is the usual remedy.\n"
-            "Costs 10 ms of latency whenever this module is in the chain.");
-    }
-
-    if (unavailable)
-        ImGui::EndDisabled();
-}
-
-void App::renderGatePanel()
-{
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted("Noise Gate");
-    ImGui::PopFont();
-
-    // The state badge and the switch share the right-hand end of the header, so
-    // the space for both is reserved up front. Positioning the badge by a fixed
-    // offset back from the switch made them overlap as soon as the text changed
-    // width.
-    const bool  open      = meters_.gateOpen.load();
-    const char* stateText = open ? "OPEN" : "SHUT";
-
-    const float kSwitchWidth = px(34.0f);
-    const float pillWidth = ImGui::CalcTextSize(stateText).x + 20.0f; // statusPill padding
-    const float spacing   = ImGui::GetStyle().ItemSpacing.x;
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x -
-                         pillWidth - kSwitchWidth - spacing);
-
-    statusPill(stateText, open ? theme::kSignal : theme::kTextFaint);
-
-    ImGui::SameLine();
-    bool enabled = params_.gateEnabled.load();
-    if (toggleSwitch("gateEnable", &enabled)) {
-        params_.gateEnabled.store(enabled);
-        params_.touch();
-        markDirty();
-    }
-
-    ImGui::Spacing();
-
-    auto knobRow = [&](const char* label, std::atomic<float>& target, float minimum,
-                       float maximum, const char* format, float defaultValue, bool logarithmic) {
-        float value = target.load();
-        const bool changed = logarithmic
-                                 ? knobLog(label, &value, minimum, maximum, format, defaultValue)
-                                 : knob(label, &value, minimum, maximum, format, defaultValue);
-        if (changed) {
-            target.store(value);
-            params_.touch();
-            markDirty();
-        }
-    };
-
-    // Labels are abbreviated because the knob widget sizes itself to its widest
-    // part; spelled out, "sidechain HP" alone would be wider than the four
-    // knobs it shares a row with.
-    knobRow("thresh", params_.gateThresholdDb, -80.0f, 0.0f, "%.0f dB", -45.0f, false);
-    ImGui::SameLine();
-    knobRow("range", params_.gateRangeDb, -90.0f, -6.0f, "%.0f dB", -60.0f, false);
-    ImGui::SameLine();
-    knobRow("hyst", params_.gateHysteresisDb, 0.0f, 24.0f, "%.0f dB", 6.0f, false);
-    ImGui::SameLine();
-    knobRow("SC HP", params_.gateSidechainHpfHz, 20.0f, 1000.0f, "%.0f Hz", 120.0f, true);
-
-    ImGui::Spacing();
-
-    knobRow("attack", params_.gateAttackMs, 0.1f, 50.0f, "%.1f ms", 2.0f, true);
-    ImGui::SameLine();
-    knobRow("hold", params_.gateHoldMs, 0.0f, 1000.0f, "%.0f ms", 120.0f, false);
-    ImGui::SameLine();
-    knobRow("release", params_.gateReleaseMs, 5.0f, 2000.0f, "%.0f ms", 180.0f, true);
-    ImGui::SameLine();
-    knobRow("look", params_.gateLookaheadMs, 0.0f, 20.0f, "%.1f ms", 3.0f, false);
-
-    ImGui::SameLine(0, 12);
-    ImGui::BeginGroup();
-    ImGui::TextDisabled("GR");
-    gainReductionMeter("gateGr", meters_.gateReductionDb.load(), -60.0f, ImVec2(px(14.0f), px(72.0f)));
-    ImGui::EndGroup();
-}
-
-void App::renderCompressorPanel()
-{
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted("Compressor");
-    ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
-
-    bool enabled = params_.compEnabled.load();
-    if (toggleSwitch("compEnable", &enabled)) {
-        params_.compEnabled.store(enabled);
-        params_.touch();
-        markDirty();
-    }
-
-    ImGui::Spacing();
-
-    auto knobRow = [&](const char* label, std::atomic<float>& target, float minimum,
-                       float maximum, const char* format, float defaultValue,
-                       bool logarithmic) {
-        float value = target.load();
-        const bool changed = logarithmic
-                                 ? knobLog(label, &value, minimum, maximum, format, defaultValue)
-                                 : knob(label, &value, minimum, maximum, format, defaultValue);
-        if (changed) {
-            target.store(value);
-            params_.touch();
-            markDirty();
-        }
-    };
-
-    knobRow("thresh", params_.compThresholdDb, -60.0f, 0.0f, "%.0f dB", -18.0f, false);
-    ImGui::SameLine();
-    knobRow("ratio", params_.compRatio, 1.0f, 20.0f, "%.1f:1", 3.0f, true);
-    ImGui::SameLine();
-    knobRow("knee", params_.compKneeDb, 0.0f, 24.0f, "%.0f dB", 6.0f, false);
-    ImGui::SameLine();
-
-    // With auto make-up on, the knob shows what the compressor computed rather
-    // than a stale manual value it is not using.
-    const bool autoMakeup = params_.compAutoMakeup.load();
-    if (autoMakeup) {
-        float computed = dsp::Compressor::autoMakeupDb(params_);
-        ImGui::BeginDisabled();
-        knob("makeup", &computed, -12.0f, 24.0f, "%.1f dB", 0.0f);
-        ImGui::EndDisabled();
-    } else {
-        knobRow("makeup", params_.compMakeupDb, -12.0f, 24.0f, "%.1f dB", 0.0f, false);
-    }
-
-    ImGui::Spacing();
-
-    knobRow("attack", params_.compAttackMs, 0.1f, 200.0f, "%.1f ms", 8.0f, true);
-    ImGui::SameLine();
-    knobRow("release", params_.compReleaseMs, 10.0f, 2000.0f, "%.0f ms", 120.0f, true);
-    ImGui::SameLine();
-    knobRow("SC HP", params_.compSidechainHpfHz, 20.0f, 1000.0f, "%.0f Hz", 100.0f, true);
-    ImGui::SameLine();
-    knobRow("look", params_.compLookaheadMs, 0.0f, 20.0f, "%.1f ms", 2.0f, false);
-
-    ImGui::SameLine(0, 12);
-    ImGui::BeginGroup();
-    ImGui::TextDisabled("GR");
-    gainReductionMeter("compGr", meters_.compressorReductionDb.load(), -24.0f, ImVec2(px(14.0f), px(72.0f)));
-    ImGui::EndGroup();
-
-    ImGui::Spacing();
-
-    bool autoMakeupToggle = autoMakeup;
-    if (ImGui::Checkbox("auto makeup", &autoMakeupToggle)) {
-        params_.compAutoMakeup.store(autoMakeupToggle);
-        params_.touch();
-        markDirty();
-    }
-
-    ImGui::SameLine(0, 16);
-    bool rms = params_.compRmsDetection.load();
-    if (ImGui::Checkbox("RMS", &rms)) {
-        params_.compRmsDetection.store(rms);
-        params_.touch();
-        markDirty();
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("RMS follows loudness and sounds transparent on speech.\n"
-                          "Off is peak detection: catches every transient, reacts harder.");
-    }
-}
-
-void App::renderLimiterPanel()
-{
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted("Output Limiter");
-    ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(34.0f));
-
-    bool enabled = params_.limiterEnabled.load();
-    if (toggleSwitch("limiterEnable", &enabled)) {
-        params_.limiterEnabled.store(enabled);
-        markDirty();
-    }
-
-    ImGui::Spacing();
-
-    float ceiling = params_.limiterCeilingDb.load();
-    if (knob("ceiling", &ceiling, -12.0f, 0.0f, "%.1f dB", -1.0f)) {
-        params_.limiterCeilingDb.store(ceiling);
-        markDirty();
-    }
-
-    ImGui::SameLine();
-    float release = params_.limiterReleaseMs.load();
-    if (knobLog("release", &release, 10.0f, 500.0f, "%.0f ms", 80.0f)) {
-        params_.limiterReleaseMs.store(release);
-        markDirty();
-    }
-
-    ImGui::SameLine(0, 18);
-    ImGui::BeginGroup();
-    ImGui::TextDisabled("GR");
-    gainReductionMeter("limiterGr", meters_.limiterReductionDb.load(), -24.0f, ImVec2(px(14.0f), px(72.0f)));
-    ImGui::EndGroup();
-
-    // Only worth the space when there is space; on a narrow window the knobs
-    // matter more than the explanation.
-    if (ImGui::GetContentRegionAvail().y > 40.0f) {
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        ImGui::TextWrapped("Catches overshoots before they reach the virtual cable, "
-                           "where the receiving application could not undo them.");
-        ImGui::PopStyleColor();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Chain panel
-// ---------------------------------------------------------------------------
-
-void App::renderChainPanel()
-{
-    // ---- folded away -----------------------------------------------------
-    if (config_.chainCollapsed) {
-        const float strip = ImGui::GetContentRegionAvail().x;
-
-        if (ImGui::Button("<", ImVec2(-1.0f, 0.0f))) {
-            config_.chainCollapsed = false;
-            markDirty();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Show the processing chain");
-
-        ImGui::Spacing();
-
-        // One letter per line: a vertical label is the only way to name a strip
-        // this narrow, and it keeps the collapsed column identifiable rather
-        // than just a mystery button.
-        ImGui::PushFont(fonts_.small, 0.0f);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        for (const char* c = "CHAIN"; *c; ++c) {
-            const char letter[2] = {*c, '\0'};
-            const float width = ImGui::CalcTextSize(letter).x;
-            ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - width) * 0.5f);
-            ImGui::TextUnformatted(letter);
-        }
-        ImGui::PopStyleColor();
-
-        // The count is what someone actually wants to know while it is folded:
-        // whether anything is in the chain at all.
-        ImGui::Spacing();
-        char count[8];
-        std::snprintf(count, sizeof(count), "%zu", chainNodes_.size());
-        const float countWidth = ImGui::CalcTextSize(count).x;
-        ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x + (strip - countWidth) * 0.5f);
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kAccent));
-        ImGui::TextUnformatted(count);
-        ImGui::PopStyleColor();
-        ImGui::PopFont();
-
-        return;
-    }
-
-    // ---- expanded --------------------------------------------------------
-    if (ImGui::Button(">", ImVec2(px(24.0f), 0))) {
-        config_.chainCollapsed = true;
-        markDirty();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Fold the processing chain away");
-
-    ImGui::SameLine();
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted("Processing Chain");
-    ImGui::PopFont();
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(96.0f));
-    if (ImGui::Button("Add plugin", ImVec2(px(96.0f), 0))) {
-        showPluginBrowser_ = true;
-        pluginFilter_[0] = '\0';
-    }
-
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-    ImGui::TextWrapped("Signal flows top to bottom. Drag to reorder.");
-    ImGui::PopStyleColor();
-    ImGui::Spacing();
-
-    const ImGuiStyle& listStyle = ImGui::GetStyle();
-
-    // Height derived from what a row holds rather than written down. Two lines
-    // of widgets plus the child's own padding is what it is; a hard-coded 62
-    // was a few pixels short at this font size, and the shortfall showed up as
-    // a scrollbar on every entry that could travel almost nowhere.
-    const float rowHeight = ImGui::GetFrameHeight() * 2.0f + listStyle.ItemSpacing.y +
-                            listStyle.WindowPadding.y * 2.0f;
-    const float rowPitch = rowHeight + listStyle.ItemSpacing.y;
-
-    // Tall enough for the entries, never taller. Sizing it to the remaining
-    // space put a scrollbar beside a list that already fitted.
-    // Half a row of headroom, which is exactly how far a grabbed entry can
-    // travel out of its slot. Without it the bottom entry, dragged downwards,
-    // would overflow the list and summon the scrollbar for the length of the
-    // gesture. Empty and invisible the rest of the time.
-    const float contentHeight = rowPitch * static_cast<float>(chainNodes_.size()) +
-                                rowPitch * 0.5f;
-    const float available     = ImGui::GetContentRegionAvail().y;
-    const float listHeight    = inspectedPlugin_
-                                    ? std::min(contentHeight, available * 0.5f)
-                                    : std::min(contentHeight, available);
-
-    ImGui::BeginChild("##chainList", ImVec2(0, listHeight), ImGuiChildFlags_None);
-
-    size_t moveFrom = SIZE_MAX, moveTo = SIZE_MAX;
-    size_t removeIndex = SIZE_MAX;
-
-    const float listTopY = ImGui::GetCursorScreenPos().y;
-    const bool  dragging = dragNodeId_ != 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left);
-    if (dragNodeId_ != 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-        dragNodeId_ = 0;
-
-    for (size_t i = 0; i < chainNodes_.size(); ++i) {
-        auto& node = chainNodes_[i];
-        ImGui::PushID(static_cast<int>(node->id()));
-
-        const bool bypassed = !node->isEnabled();
-        const bool isPlugin = node->kind() == dsp::NodeKind::Vst3Plugin;
-        const bool isDragged = dragging && node->id() == dragNodeId_;
-
-        // The grabbed row leaves the grid and follows the pointer. The offset
-        // is bounded to roughly one row because the list reorders as soon as
-        // the pointer passes the halfway mark, so the row is never far from the
-        // slot it belongs in - which is what keeps it from being drawn over the
-        // entries submitted after it.
-        const float slotTop = ImGui::GetCursorPosY();
-        if (isDragged) {
-            // Expressed as a displacement from where the row would sit, rather
-            // than converting a screen position into window coordinates. The
-            // two spaces differ by padding and scroll, and getting that
-            // conversion subtly wrong is a bug that only appears once the list
-            // is long enough to scroll.
-            const float wantedScreenY  = ImGui::GetIO().MousePos.y - dragGrabOffsetY_;
-            const float naturalScreenY = listTopY + static_cast<float>(i) * rowPitch;
-            // Half a row, not a whole one. The list reorders as the pointer
-            // passes each halfway mark, so a larger travel is unreachable
-            // anywhere except the two ends - where it would only push the row
-            // outside the list and bring back the scrollbar.
-            const float displacement = std::clamp(wantedScreenY - naturalScreenY,
-                                                  -rowPitch * 0.5f, rowPitch * 0.5f);
-
-            ImGui::SetCursorPosY(slotTop + displacement);
-        }
-
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::toVec4(theme::kPanelRaised));
-        if (isDragged)
-            ImGui::PushStyleColor(ImGuiCol_Border, theme::toVec4(theme::kAccent));
-        ImGui::BeginChild("##item", ImVec2(0, rowHeight), ImGuiChildFlags_Borders,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-        // The name is a Selectable purely so it can be grabbed. It was plain
-        // text, and plain text is not an item ImGui tracks - IsItemActive is
-        // never true for it, so reordering could not fire at all and the hint
-        // above the list was describing something that did not exist.
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              theme::toVec4(bypassed ? theme::kTextFaint : theme::kText));
-        ImGui::Selectable(node->name().c_str(), isDragged,
-                          ImGuiSelectableFlags_AllowOverlap);
-        ImGui::PopStyleColor();
-
-        if (ImGui::IsItemHovered() && !ImGui::IsItemActive() && !dragging)
-            ImGui::SetTooltip("Drag up or down to move this in the chain");
-
-        // Grabbing records where within the row the pointer landed, so the row
-        // stays put under it rather than snapping its top to the cursor.
-        if (dragNodeId_ == 0 && ImGui::IsItemActive() &&
-            ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            dragNodeId_      = node->id();
-            dragGrabOffsetY_ = ImGui::GetIO().MousePos.y - ImGui::GetWindowPos().y;
-        }
-
-        // The trailing controls are right-aligned against a width measured from
-        // the widgets themselves rather than a constant.
-        //
-        // The previous fixed offset was wrong twice over: it was subtracted
-        // from GetContentRegionAvail, which after SameLine is the space *left*
-        // rather than the row's width, and it assumed one set of buttons when a
-        // plugin row carries two more than a built-in one. Both errors put the
-        // switch on top of the label.
-        const ImGuiStyle& style = ImGui::GetStyle();
-
-        auto smallButtonWidth = [&style](const char* text) {
-            return ImGui::CalcTextSize(text).x + style.FramePadding.x * 2.0f;
-        };
-
-        // Matches the geometry inside toggleSwitch.
-        float trailing = ImGui::GetFrameHeight() * 0.75f * 1.9f;
-        if (isPlugin) {
-            trailing += style.ItemSpacing.x + smallButtonWidth("UI");
-            trailing += style.ItemSpacing.x + smallButtonWidth("Params");
-            trailing += style.ItemSpacing.x + smallButtonWidth("X");
-        }
-
-        // The right edge in window-local coordinates, which is what
-        // SetCursorPosX speaks. Taken while the cursor is still at the start of
-        // the row, because GetContentRegionAvail measures from wherever the
-        // cursor happens to be.
-        const float labelLeft = ImGui::GetCursorPosX();
-        const float rowRight  = labelLeft + ImGui::GetContentRegionAvail().x;
-        const float labelRoom = rowRight - labelLeft - trailing - style.ItemSpacing.x;
-
-        const char* subtitle = isPlugin
-            ? static_cast<host::Vst3Plugin*>(node.get())->descriptor().vendor.c_str()
-            : "built-in";
-
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
-        textFitted(subtitle, labelRoom);
-        ImGui::PopStyleColor();
-
-        ImGui::SameLine();
-        // Never left of where the label ended: on a very narrow panel the
-        // controls run out of the row rather than sitting on top of the text.
-        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rowRight - trailing));
-
-        // The switch reads as "enabled", not "bypassed": on and lit means the
-        // module is doing something. The inverse - a lit switch meaning the
-        // module is switched out of the path - is backwards from how every
-        // other control in the application behaves.
-        //
-        // For a built-in module this is the same switch as the one on its
-        // panel, not a second one beside it - see ProcessorNode::setEnabled.
-        bool enabled = !bypassed;
-        if (toggleSwitch("enable", &enabled)) {
-            node->setEnabled(enabled);
-            markDirty();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(enabled ? "active - click to switch off" : "switched off");
-
-        if (isPlugin) {
-            auto* plugin = static_cast<host::Vst3Plugin*>(node.get());
-
-            ImGui::SameLine();
-            if (ImGui::SmallButton("UI")) {
-                if (!plugin->openEditor(mainWindow_))
-                    inspectedPlugin_ = plugin; // no view of its own: use the list
-            }
-
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Params"))
-                inspectedPlugin_ = (inspectedPlugin_ == plugin) ? nullptr : plugin;
-        }
-
-        // Only a plugin can be taken out. The built-in modules are the signal
-        // path itself; removing one leaves a state the user has to know to
-        // recover from, while switching it off does the same to the sound, in
-        // one click, without losing where it sat in the order. That order is
-        // the whole reason it matters - an EQ after a plugin is a different
-        // sound from an EQ before it.
-        if (isPlugin) {
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
-            if (ImGui::SmallButton("X"))
-                removeIndex = i;
-            ImGui::PopStyleColor();
-        }
-
-        ImGui::EndChild();
-        ImGui::PopStyleColor(isDragged ? 2 : 1);
-
-        // Only the displaced row needs putting back. Rewriting the cursor after
-        // every entry meant trusting rowPitch to match ImGui's own advance
-        // exactly, and any disagreement would accumulate down the list.
-        if (isDragged)
-            ImGui::SetCursorPosY(slotTop + rowPitch);
-
-        // Where the pointer is decides the position, not how far it has
-        // travelled. A threshold on the distance is what made this jump: it
-        // fired once, reset, and needed another full push to fire again, so the
-        // row lagged the cursor and then caught up in a leap.
-        if (isDragged) {
-            const float centreY = ImGui::GetIO().MousePos.y - dragGrabOffsetY_ +
-                                  rowHeight * 0.5f;
-            const float slot    = (centreY - listTopY) / rowPitch;
-
-            auto target = static_cast<size_t>(std::clamp(
-                static_cast<int>(std::floor(slot)), 0,
-                static_cast<int>(chainNodes_.size()) - 1));
-
-            if (target != i) {
-                moveFrom = i;
-                moveTo   = target;
-            }
-        }
-
-        ImGui::PopID();
-    }
-
-    if (chainNodes_.empty())
-        ImGui::TextDisabled("the chain is empty");
-
-    // Moving the cursor is not enough to tell a window how tall its contents
-    // are - only submitting an item does that, and the row above may have left
-    // the cursor past the last one it drew. A zero-sized item is the documented
-    // way to say "the content really does reach this far".
-    ImGui::Dummy(ImVec2(0.0f, 0.0f));
-
-    ImGui::EndChild();
-
-    if (moveFrom != SIZE_MAX)
-        moveNode(moveFrom, moveTo);
-    if (removeIndex != SIZE_MAX)
-        removeNode(removeIndex);
-
-    // No "add the built-ins back" controls: they cannot leave the chain any
-    // more, so there is nothing to add. buildChainFromConfig appends any that
-    // an older configuration is missing.
-
-    if (inspectedPlugin_) {
-        ImGui::Separator();
-        renderPluginParameters();
-    }
-}
-
 void App::renderPluginParameters()
 {
     // The pointer is only valid while the node is still in the chain.
@@ -2316,21 +1001,9 @@ void App::renderPluginParameters()
         return;
     }
 
-    // Held locally for the rest of the frame. The close button clears the
-    // member, and everything below dereferences it - reading it again after the
-    // click is a null dereference, which is a crash to the desktop rather than
-    // anything the user could connect to having closed a panel.
+    // Held locally for the rest of the frame: removing the plugin clears the
+    // member, and everything below dereferences it.
     host::Vst3Plugin* plugin = inspectedPlugin_;
-
-    ImGui::PushFont(fonts_.medium, 0.0f);
-    ImGui::TextUnformatted(plugin->name().c_str());
-    ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - px(20.0f));
-    if (ImGui::SmallButton("x")) {
-        inspectedPlugin_ = nullptr;
-        return;
-    }
 
     ImGui::BeginChild("##params", ImVec2(0, 0), ImGuiChildFlags_None);
 
@@ -2372,7 +1045,7 @@ void App::renderPluginParameters()
 }
 
 // ---------------------------------------------------------------------------
-// Transport bar
+// Options
 // ---------------------------------------------------------------------------
 
 void App::renderOptionsMenu()
@@ -2605,74 +1278,6 @@ void App::renderUpdateSection()
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Opens the release list on GitHub.");
-}
-
-void App::renderTransportBar()
-{
-    ImGui::BeginChild("##transport", ImVec2(0, 0), ImGuiChildFlags_Borders);
-
-    auto meterColumn = [&](const char* title, float peak, float rms,
-                           std::atomic<float>& gainDb, const char* gainId) {
-        ImGui::BeginGroup();
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
-        ImGui::TextUnformatted(title);
-        ImGui::PopStyleColor();
-
-        levelMeter(title, dsp::gainToDb(peak), dsp::gainToDb(rms), ImVec2(px(240.0f), px(14.0f)), true);
-
-        float value = gainDb.load();
-        ImGui::SetNextItemWidth(240);
-        if (ImGui::SliderFloat(gainId, &value, -30.0f, 30.0f, "%+.1f dB")) {
-            gainDb.store(value);
-            markDirty();
-        }
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            gainDb.store(0.0f);
-            markDirty();
-        }
-        ImGui::EndGroup();
-    };
-
-    meterColumn("INPUT", meters_.inputPeak.load(), meters_.inputRms.load(),
-                params_.inputGainDb, "##inGain");
-
-    ImGui::SameLine(0, 28);
-
-    meterColumn("OUTPUT", meters_.outputPeak.load(), meters_.outputRms.load(),
-                params_.outputGainDb, "##outGain");
-
-    ImGui::SameLine(0, 28);
-
-    ImGui::BeginGroup();
-    ImGui::Spacing();
-
-    bool mute = params_.mute.load();
-    if (mute)
-        ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kDanger));
-    if (ImGui::Button(mute ? "MUTED" : "Mute", ImVec2(px(90.0f), px(30.0f)))) {
-        params_.mute.store(!mute);
-        markDirty();
-    }
-    if (mute)
-        ImGui::PopStyleColor();
-
-    ImGui::SameLine();
-
-    bool bypass = params_.bypassAll.load();
-    if (bypass)
-        ImGui::PushStyleColor(ImGuiCol_Button, theme::toVec4(theme::kWarning));
-    if (ImGui::Button(bypass ? "BYPASSED" : "Bypass all", ImVec2(px(110.0f), px(30.0f)))) {
-        params_.bypassAll.store(!bypass);
-        markDirty();
-    }
-    if (bypass)
-        ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Sends the raw microphone signal straight through, for A/B.");
-
-    ImGui::EndGroup();
-
-    ImGui::EndChild();
 }
 
 // ---------------------------------------------------------------------------
@@ -2913,7 +1518,7 @@ void App::renderLogWindow()
 
     ImGui::Separator();
 
-    ImGui::PushFont(fonts_.small, 0.0f);
+    ImGui::PushFont(fonts_.small, fonts_.small->LegacySize);
     ImGui::BeginChild("##entries", ImVec2(0, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar);
 

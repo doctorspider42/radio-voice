@@ -9,6 +9,51 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.5.0] — 2026-10-31
+
+### Changed
+
+- **A new look, top to bottom.** RadioVoice now looks like the studio gear it
+  replaces: graphite faceplates lit in the teal of the icon, hardware-style
+  knobs with a lit arc and a small readout, and monospaced numbers that no
+  longer jitter as they change. Colour carries meaning and nothing else — teal
+  is signal, violet is gain reduction, amber is a warning, red is a stop.
+- **The chain is a rack.** Every module, built-in or VST3, is a unit down the
+  left side with its own live display and power button. Click a unit to open
+  it; drag it to move it in the chain - the unit lifts and follows the pointer
+  while the others slide aside to make room. The output limiter is shown as the last
+  unit, so the rack reads as the whole signal path.
+- **Every built-in module opens as a full plugin window.**
+  - The **compressor** shows six seconds of level and gain reduction, its
+    transfer curve with the knee and the current level on it, and an
+    analogue-style gain-reduction needle.
+  - The **gate** draws its envelope with the open and close thresholds and a
+    strip of when it was open, next to a large OPEN/SHUT lamp.
+  - The **equalizer** has numbered band handles, a glowing response curve, a
+    panel for the selected band and a row of band tiles.
+  - The **noise suppressor** compares the spectrum going in and coming out,
+    shows voice activity over time, and has four quick settings from Light to
+    Max.
+  - The **limiter** shows what it let through and what it caught, with the
+    ceiling drawn across.
+- **VST3 editors open inside the window.** A plugin's own interface is docked
+  in the same frame as the built-in modules and fills the space available: a
+  resizable editor is resized to it, and a fixed-size one is zoomed when the
+  plugin supports that; one that keeps its proportions is shrunk until the
+  whole editor fits. It follows the window while you resize it rather than
+  catching up afterwards, and the plugin's own resize grip can make it smaller
+  but cannot drag it out of the window. **Pop out** still gives it a window of its own, and
+  **Parameters** shows a plain list of its controls. An editor that cannot fit
+  offers to open in its own window. While a plugin builds its editor - which
+  some take a moment over the first time - a spinner says so instead of the
+  window simply freezing.
+- **Devices have their own screen.** The microphone and output are set once and
+  then left alone, so they no longer take a column of the main window. The
+  route in the header shows what is connected and opens the device screen,
+  where every device is listed with its rate, and virtual cables are marked.
+- **The level meters show peak and RMS as one signal**: the solid bar is RMS,
+  and the same gradient runs dimmed up to the peak line.
+
 ## [0.4.7] — 2026-10-30
 
 ### Changed
