@@ -1,8 +1,9 @@
 #include "host/PluginScanner.h"
 
+#ifdef _WIN32
 #include <windows.h>
-
-#include <objbase.h> // CoInitializeEx: plugin DLLs routinely use COM on load
+#include <objbase.h>
+#endif
 
 #include <algorithm>
 #include <fstream>
@@ -11,6 +12,7 @@
 
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "core/Platform.h"
 #include "core/Strings.h"
 
 #if RV_HAS_VST3
@@ -259,7 +261,7 @@ void PluginScanner::startScan(std::vector<fs::path> directories, bool full)
         directories = paths::defaultVst3Directories();
         std::lock_guard lock(mutex_);
         for (const auto& extra : extraDirectories_)
-            directories.push_back(fs::path(toWide(extra)));
+            directories.push_back(pathFromUtf8(extra));
     }
 
     cancel_.store(false, std::memory_order_release);
@@ -276,9 +278,12 @@ void PluginScanner::cancelScan()
 
 void PluginScanner::scanThread(std::vector<fs::path> directories, bool full)
 {
+    platform::AutoreleasePool pool;
     // Plugin DLLs routinely use COM in DllMain and in their factory.
+#ifdef _WIN32
     const HRESULT comStatus = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const bool comOwned = SUCCEEDED(comStatus);
+#endif
 
     const auto bundles = findBundles(directories);
     RV_INFO("scanning %zu VST3 bundle(s)", bundles.size());
@@ -295,7 +300,7 @@ void PluginScanner::scanThread(std::vector<fs::path> directories, bool full)
         progress_.store(static_cast<float>(i) / static_cast<float>(std::max<size_t>(1, bundles.size())),
                         std::memory_order_relaxed);
 
-        const std::string path = toUtf8(bundles[i].wstring());
+        const std::string path = pathToUtf8(bundles[i]);
 
         {
             std::lock_guard lock(mutex_);
@@ -335,15 +340,17 @@ void PluginScanner::scanThread(std::vector<fs::path> directories, bool full)
     saveCache();
     scanning_.store(false, std::memory_order_release);
 
+#ifdef _WIN32
     if (comOwned)
         ::CoUninitialize();
+#endif
 }
 
 #if RV_HAS_VST3
 
 void PluginScanner::probeBundle(const fs::path& bundle)
 {
-    const std::string path = toUtf8(bundle.wstring());
+    const std::string path = pathToUtf8(bundle);
 
     writeSentinel(path);
 

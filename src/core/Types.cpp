@@ -7,6 +7,7 @@ const char* toString(BackendType b)
     switch (b) {
         case BackendType::Wasapi:      return "WASAPI";
         case BackendType::DirectSound: return "DirectSound";
+        case BackendType::CoreAudio:   return "CoreAudio";
         case BackendType::Asio:        return "ASIO";
     }
     return "?";

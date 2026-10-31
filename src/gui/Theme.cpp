@@ -1,6 +1,8 @@
 #include "gui/Theme.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <filesystem>
 
@@ -14,11 +16,23 @@ namespace {
 /// game overlay. The bundled ImGui font is only a fallback.
 std::filesystem::path systemFont(const wchar_t* fileName)
 {
+#ifdef _WIN32
     wchar_t windows[MAX_PATH] = {};
     if (::GetWindowsDirectoryW(windows, MAX_PATH) == 0)
         return {};
 
     std::filesystem::path path = std::filesystem::path(windows) / L"Fonts" / fileName;
+#else
+    // System fonts are read in place; no Apple font is redistributed.
+    std::filesystem::path path = "/System/Library/Fonts/Supplemental/Arial.ttf";
+    const std::wstring name(fileName);
+    if (name == L"seguisb.ttf" || name == L"segoeuib.ttf")
+        path = "/System/Library/Fonts/Supplemental/Arial Bold.ttf";
+    else if (name == L"consola.ttf")
+        path = "/System/Library/Fonts/Menlo.ttc";
+    else if (name == L"consolab.ttf")
+        path = "/System/Library/Fonts/Menlo.ttc";
+#endif
     std::error_code ec;
     return std::filesystem::exists(path, ec) ? path : std::filesystem::path{};
 }
@@ -72,7 +86,7 @@ Fonts loadFonts(float dpiScale)
                               28.0f * dpiScale);
 
     if (!fonts.regular) {
-        RV_WARN("Segoe UI is unavailable; falling back to the built-in font");
+        RV_WARN("System font is unavailable; falling back to the built-in font");
         fonts.regular = io.Fonts->AddFontDefault();
         fonts.medium = fonts.small = fonts.heading = fonts.regular;
         fonts.caps = fonts.title = fonts.mono = fonts.monoLarge = fonts.regular;

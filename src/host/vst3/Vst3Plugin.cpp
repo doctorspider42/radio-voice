@@ -5,7 +5,10 @@
 
 #if RV_HAS_VST3
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
+
 
 #include <algorithm>
 #include <array>
@@ -52,13 +55,11 @@ std::string fromVstString(const Vst::TChar* text, size_t maxLength = 128)
     if (!text)
         return {};
 
-    // TChar is UTF-16, which is what wchar_t is on Windows.
-    const auto* wide = reinterpret_cast<const wchar_t*>(text);
+    // VST strings are UTF-16 on every OS; wchar_t is 32-bit on macOS.
+    const auto* utf16 = reinterpret_cast<const char16_t*>(text);
     size_t length = 0;
-    while (length < maxLength && wide[length] != L'\0')
-        ++length;
-
-    return toUtf8(std::wstring_view(wide, length));
+    while (length < maxLength && utf16[length]) ++length;
+    return fromUtf16({utf16, length});
 }
 
 /// Lock-free single-producer / single-consumer queue of parameter edits.
@@ -724,7 +725,7 @@ bool Vst3Plugin::openEditor(void* ownerWindow)
         impl_->editor.reset();
     };
 
-    if (!impl.editor->open(view, impl.displayName, static_cast<HWND>(ownerWindow))) {
+    if (!impl.editor->open(view, impl.displayName, static_cast<NativeEditorParent>(ownerWindow))) {
         impl.editor.reset();
         return false;
     }
@@ -761,7 +762,7 @@ bool Vst3Plugin::showEmbeddedEditor(void* parentWindow, int x, int y, int areaWi
             return false;
 
         auto window = std::make_unique<Vst3EditorWindow>();
-        if (!window->openChild(view, static_cast<HWND>(parentWindow)))
+        if (!window->openChild(view, static_cast<NativeEditorParent>(parentWindow)))
             return false;
         impl.embedded = std::move(window);
     }

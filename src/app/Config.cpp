@@ -16,7 +16,7 @@ constexpr int kConfigVersion = 1;
 
 void readDevice(const json& node, DeviceConfig& device)
 {
-    device.backend      = static_cast<BackendType>(node.value("backend", 0));
+    device.backend      = static_cast<BackendType>(node.value("backend", static_cast<int>(kDefaultBackend)));
     device.wasapiMode   = static_cast<WasapiMode>(node.value("wasapiMode", 0));
     device.deviceId     = node.value("deviceId", "");
     device.deviceName   = node.value("deviceName", "");

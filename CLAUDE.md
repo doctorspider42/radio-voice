@@ -40,6 +40,24 @@ untranslated one.
 - `installer` — Inno Setup script, and the staging that folds the driver into it
 - `driver` — the kernel driver and its own tooling; see `driver/README.md`
 
+## macOS
+
+`src/platform/macos` contains the Cocoa/Metal entry point, AUHAL CoreAudio
+streams and enumeration, native VST3 editor containers, filesystem integration
+and login items. The redesigned ImGui panels and DSP remain shared. Do not
+change system-wide audio rates or buffer sizes when opening a stream. Use
+BlackHole as a separately installed virtual cable, not the Windows WaveRT driver.
+
+`./build-macos.sh` builds `build-macos/bin/RadioVoice.app` and signs it with the
+configured permanent identity (or ad-hoc for unconfigured development builds).
+`tools/package_macos.py` creates a branded DMG, signs a private copy of the app,
+and verifies the payload after mounting the final read-only image. See
+`installer/macos/README.md` for signing precedence and CI secrets.
+`ctest --test-dir build-macos --output-on-failure` checks Unicode, ARM denormal
+handling, RNNoise and real silent output callbacks (no microphone capture).
+`RadioVoice.app/Contents/MacOS/RadioVoice --smoke-test` checks actual stationary-window Metal presentations
+using temporary settings and no microphone permission request.
+
 ## Build
 
 ```

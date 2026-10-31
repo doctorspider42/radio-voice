@@ -1,6 +1,10 @@
 #include "core/Strings.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 #include <array>
 #include <cctype>
@@ -14,6 +18,7 @@ std::string toUtf8(std::wstring_view w)
     if (w.empty())
         return {};
 
+#ifdef _WIN32
     const int needed = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
                                              nullptr, 0, nullptr, nullptr);
     if (needed <= 0)
@@ -23,6 +28,16 @@ std::string toUtf8(std::wstring_view w)
     ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
                           out.data(), needed, nullptr, nullptr);
     return out;
+#else
+    CFStringRef text = CFStringCreateWithBytes(nullptr,
+        reinterpret_cast<const UInt8*>(w.data()), w.size() * sizeof(wchar_t), kCFStringEncodingUTF32LE, false);
+    if (!text) return {};
+    const auto capacity = CFStringGetMaximumSizeForEncoding(CFStringGetLength(text), kCFStringEncodingUTF8) + 1;
+    std::vector<char> bytes(static_cast<size_t>(capacity));
+    const bool ok = CFStringGetCString(text, bytes.data(), capacity, kCFStringEncodingUTF8);
+    CFRelease(text);
+    return ok ? std::string(bytes.data()) : std::string{};
+#endif
 }
 
 std::wstring toWide(std::string_view s)
@@ -30,6 +45,7 @@ std::wstring toWide(std::string_view s)
     if (s.empty())
         return {};
 
+#ifdef _WIN32
     const int needed = ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
                                              nullptr, 0);
     if (needed <= 0)
@@ -39,6 +55,34 @@ std::wstring toWide(std::string_view s)
     ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
                           out.data(), needed);
     return out;
+#else
+    CFStringRef text = CFStringCreateWithBytes(nullptr, reinterpret_cast<const UInt8*>(s.data()),
+        s.size(), kCFStringEncodingUTF8, false);
+    if (!text) return {};
+    std::wstring result(static_cast<size_t>(CFStringGetLength(text)), L'\0');
+    CFIndex used = 0;
+    CFStringGetBytes(text, CFRangeMake(0, CFStringGetLength(text)), kCFStringEncodingUTF32LE,
+        0, false, reinterpret_cast<UInt8*>(result.data()), result.size() * sizeof(wchar_t), &used);
+    CFRelease(text);
+    result.resize(static_cast<size_t>(used) / sizeof(wchar_t));
+    return result;
+#endif
+}
+
+std::string fromUtf16(std::u16string_view text)
+{
+#ifdef _WIN32
+    return toUtf8({reinterpret_cast<const wchar_t*>(text.data()), text.size()});
+#else
+    CFStringRef value = CFStringCreateWithCharacters(nullptr,
+        reinterpret_cast<const UniChar*>(text.data()), text.size());
+    if (!value) return {};
+    const auto capacity = CFStringGetMaximumSizeForEncoding(CFStringGetLength(value), kCFStringEncodingUTF8) + 1;
+    std::vector<char> bytes(static_cast<size_t>(capacity));
+    const bool ok = CFStringGetCString(value, bytes.data(), capacity, kCFStringEncodingUTF8);
+    CFRelease(value);
+    return ok ? std::string(bytes.data()) : std::string{};
+#endif
 }
 
 bool iequals(std::string_view a, std::string_view b)

@@ -24,7 +24,7 @@ struct ChainEntryConfig {
 };
 
 struct DeviceConfig {
-    BackendType backend    = BackendType::Wasapi;
+    BackendType backend    = kDefaultBackend;
     WasapiMode  wasapiMode = WasapiMode::Shared;
     DeviceId    deviceId;
     std::string deviceName; ///< Remembered so the UI can say what went missing.

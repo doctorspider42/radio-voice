@@ -9,6 +9,55 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.7.1] — 2026-10-31
+
+### Fixed
+
+- The macOS window now presents a fresh Metal drawable on every frame instead
+  of freezing between window movements. The UI smoke check measures actual
+  onscreen presentations with the window stationary, rather than timer ticks.
+
+## [0.7.0] — 2026-10-31
+
+### Added
+
+- A branded macOS disk image: drag RadioVoice to Applications to install. The
+  application and image are signed with a configured permanent Developer ID;
+  local packaging can reuse Zitter's pinned identity. Notarization with an App
+  Store Connect API key staples Apple tickets to both the app and the DMG.
+- Universal macOS binaries (Apple Silicon and Intel), built in CI alongside the
+  Windows installer, with SHA-256 checksums. CI images made without a configured
+  signing certificate are explicitly marked unsigned development previews.
+
+## [0.6.1] — 2026-10-31
+
+### Added
+
+- An opt-in macOS route check (`--verify-route`) independently captures the
+  BlackHole input, checks normal/muted/restored output, and reports aggregate
+  levels without saving microphone recordings.
+
+### Fixed
+
+- The macOS interface now opens while microphone permission is pending, rather
+  than leaving an empty window behind the system prompt.
+
+## [0.6.0] — 2026-10-31
+
+### Added
+
+- **macOS preview.** The redesigned rack now runs in a native macOS window with
+  Metal rendering. CoreAudio connects the microphone, processed output and
+  optional headphone monitor; BlackHole 2ch provides the virtual microphone for
+  other applications. Requires macOS 13 or newer.
+- **Native macOS VST3 hosting.** Scan the system and user VST3 folders and open
+  compatible plugin editors inside the rack or in their own windows. Plugins
+  must support the running application's CPU architecture.
+- **macOS integration.** Microphone permission handling, a menu bar icon,
+  per-user settings under Application Support, and optional start at login.
+- A macOS build preset and portability/playback checks. macOS preview updates
+  are manual; the Windows installer updater remains Windows-only.
+
 ## [0.5.0] — 2026-10-31
 
 ### Changed

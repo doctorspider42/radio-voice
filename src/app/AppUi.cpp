@@ -6,7 +6,7 @@
 
 #include "app/App.h"
 
-#include <windows.h>
+
 
 #include <algorithm>
 #include <cctype>
@@ -646,7 +646,7 @@ void App::renderHeader()
                         "The clock bridge is the buffer that lets the capture and\n"
                         "playback devices run on their own clocks. It is sized from\n"
                         "the device period, so exclusive mode - or a smaller period in\n"
-                        "Windows sound settings - is what shrinks it.\n"
+                        "system sound settings - is what shrinks it.\n"
                         "\n"
                         "Shared-mode drivers often report zero device latency, so the\n"
                         "true figure is somewhat higher than this.",
@@ -798,7 +798,7 @@ void App::renderNotices()
             {theme::kWarning,
              "\"" + config_.input.deviceName +
                  "\" is open but is not delivering any audio. Check that the device is not "
-                 "muted or disabled in Windows sound settings, and - for a virtual "
+                 "muted or disabled in system sound settings, and - for a virtual "
                  "microphone - that the application driving it is actually running.",
              false});
     }

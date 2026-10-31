@@ -2,7 +2,9 @@
 
 #if RV_HAS_VST3
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <functional>
 #include <string>
@@ -11,6 +13,11 @@
 #include "pluginterfaces/gui/iplugview.h"
 
 namespace rv::host {
+#ifdef _WIN32
+using NativeEditorParent = HWND;
+#else
+using NativeEditorParent = void*;
+#endif
 
 /// Win32 window that hosts a plugin's own editor.
 ///
@@ -30,11 +37,11 @@ public:
 
     /// Creates the window and attaches `view` to it. The view is addref'd for
     /// the lifetime of the window.
-    bool open(Steinberg::IPlugView* view, const std::string& title, HWND owner);
+    bool open(Steinberg::IPlugView* view, const std::string& title, NativeEditorParent owner);
 
     /// Creates a hidden child window of `parent` and attaches `view` to it.
     /// Place it with `place`; it stays hidden until then.
-    bool openChild(Steinberg::IPlugView* view, HWND parent);
+    bool openChild(Steinberg::IPlugView* view, NativeEditorParent parent);
 
     /// Child windows only: moves the window's top-left corner to `x`, `y` in the
     /// parent's client coordinates and shows it.
@@ -58,6 +65,9 @@ public:
 
     bool isOpen() const { return hwnd_ != nullptr; }
     void raise();
+#ifdef __APPLE__
+    void nativeResized(int width, int height);
+#endif
 
     /// Invoked when the user closes the window. Runs on the UI thread.
     std::function<void()> onClosed;
@@ -73,8 +83,13 @@ public:
     REFCOUNT_METHODS(Steinberg::FObject)
 
 private:
+#ifdef _WIN32
     static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static void registerWindowClass();
+#else
+    void* window_ = nullptr;
+    void* delegate_ = nullptr;
+#endif
 
     /// Grows a client-area rectangle into the full window rectangle for the
     /// current style, so the plugin gets exactly the client size it asked for.
@@ -87,7 +102,7 @@ private:
     /// Shared tail of open and openChild: attaches the view to hwnd_.
     bool attach(Steinberg::IPlugView* view);
 
-    HWND hwnd_ = nullptr;
+    NativeEditorParent hwnd_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> view_;
     bool resizable_ = false;
     bool child_     = false;
@@ -98,7 +113,9 @@ private:
     /// A fixed-size editor's size at a content scale of 1, and the scale it is at.
     int    baseWidth_  = 0;
     int    baseHeight_ = 0;
+#ifdef _WIN32
     double scale_      = 1.0;
+#endif
 };
 
 } // namespace rv::host

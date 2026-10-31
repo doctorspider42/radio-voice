@@ -1,8 +1,6 @@
 #include "app/App.h"
 
-#include <windows.h>
-
-#include <shellapi.h>
+#include "core/Platform.h"
 
 #include <algorithm>
 #include <cctype>
@@ -28,7 +26,11 @@ namespace {
 
 using namespace rv::gui;
 
+#ifdef __APPLE__
+constexpr const char* kVirtualCableUrl = "https://existential.audio/blackhole/";
+#else
 constexpr const char* kVirtualCableUrl = "https://vb-audio.com/Cable/";
+#endif
 constexpr const char* kReleasesUrl =
     "https://github.com/doctorspider42/radio-voice/releases";
 
@@ -56,7 +58,7 @@ void App::setDpiScale(float dpiScale, const gui::Fonts& fonts)
 }
 
 bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
-                     Config loaded)
+                     Config loaded, bool allowAutoStart)
 {
     mainWindow_ = mainWindow;
     fonts_      = fonts;
@@ -80,10 +82,10 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
     // id handed to the ASIO backend is read as a driver name, and the failure
     // that follows names a GUID that appears nowhere the user can act on.
     if (config_.input.deviceId.empty()) {
-        const auto inputs = devices_.inputs(BackendType::Wasapi);
+        const auto inputs = devices_.inputs(kDefaultBackend);
         for (const auto& device : inputs) {
             if (device.isDefault) {
-                config_.input.backend    = BackendType::Wasapi;
+                config_.input.backend    = kDefaultBackend;
                 config_.input.deviceId   = device.id;
                 config_.input.deviceName = device.name;
                 break;
@@ -131,7 +133,7 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
             selectedUnit_ = node->id();
     }
 
-    if (config_.autoStart && !config_.output.deviceId.empty())
+    if (allowAutoStart && config_.autoStart && !config_.output.deviceId.empty())
         startEngine();
 
     // A background scan on every start keeps newly installed plugins visible
@@ -753,10 +755,17 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
     // --- backend ----------------------------------------------------------
     // A segmented control rather than a list: there are never more than three,
     // and seeing all of them at once is what tells someone ASIO is an option.
+#ifdef __APPLE__
+    BackendType backends[] = {BackendType::CoreAudio};
+    const char* backendLabels[] = {"COREAUDIO"};
+    const int backendCount = 1;
+#else
     BackendType backends[3] = {BackendType::Wasapi, BackendType::DirectSound,
                                BackendType::Asio};
     const char* backendLabels[3] = {"WASAPI", "DIRECTSOUND", "ASIO"};
     const int   backendCount     = allowAsio ? 3 : 2;
+
+#endif
 
     int current = 0;
     for (int i = 0; i < backendCount; ++i) {
@@ -919,6 +928,12 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
         }
     }
 
+#ifdef __APPLE__
+    capsLabel("SAMPLE RATE");
+    const auto selected = devices_.find(device.deviceId, device.backend);
+    ImGui::Text("%d Hz", selected ? selected->defaultSampleRate : device.sampleRate);
+    ImGui::TextWrapped("Change the device rate in Audio MIDI Setup. Use 48000 Hz on the output for noise suppression.");
+#else
     const int rates[] = {44100, 48000, 88200, 96000, 176400, 192000};
     char rateText[32];
     std::snprintf(rateText, sizeof(rateText), "%d Hz", device.sampleRate);
@@ -936,6 +951,8 @@ void App::renderDeviceSelector(const char* label, DeviceConfig& device, bool isI
         }
         ImGui::EndCombo();
     }
+
+#endif
 
     ImGui::PopID();
 }
@@ -977,15 +994,25 @@ void App::renderVirtualCableHint()
 
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextDim));
     ImGui::TextWrapped(
+#ifdef __APPLE__
+        "Install BlackHole 2ch, then choose BlackHole as the output here and "
+        "as the microphone in Discord, OBS, Teams or your receiving application. "
+        "Use Monitor to hear the processed signal through headphones."
+#else
         "Windows has no built-in way for one application to expose an audio "
         "stream as a microphone to another - that needs a driver. Install a "
         "virtual cable, then set the output above to \"CABLE Input\" and choose "
-        "\"CABLE Output\" as the microphone in Discord, OBS, Teams and so on.");
+        "\"CABLE Output\" as the microphone in Discord, OBS, Teams and so on."
+#endif
+    );
     ImGui::PopStyleColor();
 
+#ifdef __APPLE__
+    if (ImGui::SmallButton("Get BlackHole 2ch")) {
+#else
     if (ImGui::SmallButton("Open the VB-CABLE download page")) {
-        ::ShellExecuteW(nullptr, L"open", toWide(kVirtualCableUrl).c_str(),
-                        nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+        platform::openUrl(kVirtualCableUrl);
     }
 }
 
@@ -1120,6 +1147,13 @@ void App::renderOptionsMenu()
     // Read from the registry rather than mirrored into the configuration: the
     // installer writes the same entry, and a copy here would go stale the first
     // time the two disagreed.
+#ifdef __APPLE__
+    bool startAtLogin = autostart::enabled();
+    if (ImGui::Checkbox("Start at login", &startAtLogin))
+        autostart::setEnabled(startAtLogin);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Manage RadioVoice in System Settings > General > Login Items.");
+#else
     bool startWithWindows = autostart::enabled();
     if (ImGui::Checkbox("Start with Windows", &startWithWindows))
         autostart::setEnabled(startWithWindows);
@@ -1128,6 +1162,8 @@ void App::renderOptionsMenu()
                           "with --minimized. The installer's option writes the same\n"
                           "one, so the two cannot drift apart.");
     }
+
+#endif
 
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
@@ -1144,6 +1180,13 @@ void App::renderOptionsMenu()
 
 void App::renderUpdateSection()
 {
+#ifdef __APPLE__
+    ImGui::TextWrapped("macOS preview builds are updated manually.");
+    if (ImGui::SmallButton("Open releases"))
+        platform::openUrl(kReleasesUrl);
+    return;
+#endif
+
     const auto update = updater_.status();
 
     const auto tinted = [](ImU32 colour, const char* text) {
@@ -1273,8 +1316,7 @@ void App::renderUpdateSection()
 
     ImGui::SameLine();
     if (ImGui::Button("Releases", ImVec2(px(110.0f), 0))) {
-        ::ShellExecuteW(nullptr, L"open", toWide(kReleasesUrl).c_str(), nullptr, nullptr,
-                        SW_SHOWNORMAL);
+        platform::openUrl(kReleasesUrl);
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Opens the release list on GitHub.");
@@ -1305,7 +1347,7 @@ void App::renderScanFolders()
         ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kTextFaint));
         ImGui::Bullet();
         ImGui::SameLine();
-        ImGui::TextWrapped("%s", toUtf8(dir.wstring()).c_str());
+        ImGui::TextWrapped("%s", pathToUtf8(dir).c_str());
         ImGui::PopStyleColor();
     }
 
@@ -1328,7 +1370,7 @@ void App::renderScanFolders()
 
         // A folder that has gone away - an unplugged drive, a share that is
         // down - is worth flagging rather than quietly scanning nothing.
-        const bool exists = std::filesystem::exists(std::filesystem::path(toWide(extras[i])));
+        const bool exists = std::filesystem::exists(pathFromUtf8(extras[i]));
         ImGui::PushStyleColor(ImGuiCol_Text,
                               theme::toVec4(exists ? theme::kText : theme::kWarning));
         ImGui::TextWrapped("%s", extras[i].c_str());
@@ -1344,7 +1386,7 @@ void App::renderScanFolders()
     if (ImGui::Button("Add folder...")) {
         const auto chosen = paths::pickDirectory(mainWindow_, L"Folder with VST3 plugins");
         if (!chosen.empty()) {
-            const std::string text = toUtf8(chosen.wstring());
+            const std::string text = pathToUtf8(chosen);
             if (std::find(extras.begin(), extras.end(), text) == extras.end()) {
                 extras.push_back(text);
                 changed = true;

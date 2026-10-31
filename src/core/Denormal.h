@@ -1,7 +1,11 @@
 #pragma once
 
+#if defined(__aarch64__)
+#include <cstdint>
+#else
 #include <pmmintrin.h>
 #include <xmmintrin.h>
+#endif
 
 namespace rv {
 
@@ -17,26 +21,27 @@ namespace rv {
 /// underneath them.
 class ScopedNoDenormals {
 public:
+#if defined(__aarch64__)
     ScopedNoDenormals() noexcept
-        : flushZero_(_MM_GET_FLUSH_ZERO_MODE())
-        , denormalsZero_(_MM_GET_DENORMALS_ZERO_MODE())
     {
-        _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-        _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+        asm volatile("mrs %0, fpcr" : "=r"(previous_));
+        const std::uint64_t next = previous_ | (1ULL << 24);
+        asm volatile("msr fpcr, %0" : : "r"(next));
     }
-
-    ~ScopedNoDenormals() noexcept
-    {
-        _MM_SET_FLUSH_ZERO_MODE(flushZero_);
-        _MM_SET_DENORMALS_ZERO_MODE(denormalsZero_);
-    }
-
+    ~ScopedNoDenormals() noexcept { asm volatile("msr fpcr, %0" : : "r"(previous_)); }
+#else
+    ScopedNoDenormals() noexcept
+        : previous_(_mm_getcsr()) { _mm_setcsr(previous_ | 0x8040); }
+    ~ScopedNoDenormals() noexcept { _mm_setcsr(previous_); }
+#endif
     ScopedNoDenormals(const ScopedNoDenormals&) = delete;
     ScopedNoDenormals& operator=(const ScopedNoDenormals&) = delete;
-
 private:
-    unsigned int flushZero_;
-    unsigned int denormalsZero_;
+#if defined(__aarch64__)
+    std::uint64_t previous_;
+#else
+    unsigned int previous_;
+#endif
 };
 
 /// Replaces non-finite values with silence.

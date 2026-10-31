@@ -1,4 +1,5 @@
-# Builds the installer on every push to main, and publishes it as a release.
+# Builds Windows and macOS installers on main, codex branches and pull requests.
+# Only main publishes a release, after both application builds succeed.
 #
 # The version comes from the VERSION file, never from this workflow. A push
 # whose version already has a tag still builds - the artifact is uploaded and
@@ -10,11 +11,22 @@ name: Release
 
 on:
   push:
+    branches: [main, "codex/**"]
+  pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: 'Use signing/notarization credentials for this manually approved branch build'
+        type: boolean
+        default: false
+
+concurrency:
+  group: radiovoice-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Matches the ids in driver/README.md, so the two cannot drift apart.
@@ -79,7 +91,7 @@ jobs:
     needs: driver
     # `always()` so that a failed driver job produces an application-only
     # installer instead of no installer at all.
-    if: always()
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
 
@@ -150,54 +162,135 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
-      # The section of CHANGELOG.md for this version, verbatim. An empty one is
-      # a mistake worth stopping for: a release with no notes is a release
-      # nobody can evaluate.
-      - name: Extract the release notes
-        id: notes
-        shell: pwsh
+
+  macos:
+    name: macOS universal DMG
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install packaging tools
         run: |
-          $version = '${{ steps.version.outputs.version }}'
-          # Explicit, so that the accented characters in the notes survive
-          # whatever the runner's default happens to be.
-          $lines = Get-Content CHANGELOG.md -Encoding utf8
-          $start = $null
-          $notes = @()
+          command -v ninja || brew install ninja
+          python -m pip install -r installer/macos/requirements.txt
 
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match "^##\s*\[$([regex]::Escape($version))\]") { $start = $i + 1; continue }
-            if ($null -ne $start -and $lines[$i] -match '^##\s*\[') { break }
-            if ($null -ne $start) { $notes += $lines[$i] }
-          }
+      - name: Configure signing
+        id: signing
+        env:
+          CERTIFICATE: ${{ (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.sign_macos)) && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12_BASE64 || '' }}
+          CERTIFICATE_PASSWORD: ${{ (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.sign_macos)) && github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+          EXPECTED_IDENTITY: ${{ vars.MACOS_CODESIGN_IDENTITY }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo '::notice::No macOS signing certificate configured. Building an explicitly unsigned development preview.'
+            echo 'identity=-' >> "$GITHUB_OUTPUT"
+            echo 'signed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/radiovoice-signing.keychain-db"
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          echo "RV_CI_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -nE 's/.* ([A-F0-9]{40}) "Developer ID Application:.*$/\1/p' | head -1)
+          test -n "$identity" || { echo '::error::No valid Developer ID Application identity in the supplied certificate'; exit 1; }
+          if [ -n "$EXPECTED_IDENTITY" ] && [ "$identity" != "$EXPECTED_IDENTITY" ]; then
+            echo '::error::The imported certificate does not match MACOS_CODESIGN_IDENTITY'
+            exit 1
+          fi
+          rm "$RUNNER_TEMP/certificate.p12"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo 'signed=true' >> "$GITHUB_OUTPUT"
 
-          if ($null -eq $start) {
-            throw "CHANGELOG.md has no section for $version. Add one before releasing."
-          }
+      - name: Build Apple Silicon and Intel slices
+        env:
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: |
+          cmake --preset macos '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' "-DRV_CODESIGN_IDENTITY=$SIGNING_IDENTITY"
+          cmake --build --preset macos --parallel 3
+          python -c 'import sys; sys.path.insert(0, "tools"); from pathlib import Path; from package_macos import architectures; assert architectures(Path("build-macos/bin/RadioVoice.app")) == "universal"'
 
-          $text = ($notes -join "`n").Trim()
-          if (-not $text) { throw "The CHANGELOG.md section for $version is empty." }
+      - name: Verify portable audio and packaging logic
+        run: |
+          ctest --test-dir build-macos --output-on-failure -E macos_audio_playback
+          python -m unittest discover -s tests -p 'test_macos_packaging.py'
 
-          Set-Content -Path release-notes.md -Value $text -Encoding utf8
+      - name: Package the installer
+        env:
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          NOTARY_KEY: ${{ steps.signing.outputs.signed == 'true' && secrets.MACOS_NOTARY_KEY_P8 || '' }}
+          MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ steps.signing.outputs.signed == 'true' && secrets.MACOS_NOTARY_ISSUER_ID || '' }}
+        run: |
+          if [ "$SIGNED" = true ]; then
+            if [ -n "$NOTARY_KEY" ]; then
+              export MACOS_NOTARY_KEY_PATH="$RUNNER_TEMP/notary-key.p8"
+              (umask 077; printf '%s' "$NOTARY_KEY" > "$MACOS_NOTARY_KEY_PATH")
+              python tools/package_macos.py --identity "$SIGNING_IDENTITY" --notarize
+            else
+              python tools/package_macos.py --identity "$SIGNING_IDENTITY"
+            fi
+          else
+            python tools/package_macos.py --unsigned
+          fi
 
-      - name: Publish the release
-        shell: pwsh
+      - name: Upload the macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadioVoice-macos-universal
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          if [ -n "${RV_CI_KEYCHAIN:-}" ]; then security delete-keychain "$RV_CI_KEYCHAIN"; fi
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/notary-key.p8"
+
+  publish:
+    name: Publish Windows and macOS
+    runs-on: ubuntu-latest
+    needs: [installer, macos]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: RadioVoice-*
+          merge-multiple: true
+          path: dist
+
+      - name: Prepare release metadata
+        id: version
+        run: |
+          python tools/release_notes.py --output release-notes.md
+          echo "tag=v$(cat VERSION | tr -d '\r\n')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish once all required builds succeed
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $tag = '${{ steps.version.outputs.tag }}'
-
-          # A push that did not bump VERSION is not an error - plenty of them
-          # only touch CI or documentation - but it is not a second release of
-          # the same version either.
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "::notice::$tag is already released; skipping. Bump VERSION to publish a new one."
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::notice::$RELEASE_TAG is already released; bump VERSION to publish a new one."
             exit 0
-          }
-
-          $assets = Get-ChildItem dist\*.exe
-          gh release create $tag $assets.FullName `
-            --title "RadioVoice $tag" `
-            --notes-file release-notes.md `
-            --target $env:GITHUB_SHA
-          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          fi
+          gh release create "$RELEASE_TAG" dist/* \
+            --title "RadioVoice $RELEASE_TAG" \
+            --notes-file release-notes.md --target "$GITHUB_SHA"

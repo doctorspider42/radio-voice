@@ -1,14 +1,18 @@
 #include "audio/Engine.h"
 
-#include <windows.h>
+#include <chrono>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
+#ifdef __APPLE__
+#include "platform/macos/CoreAudioStream.h"
+#else
 #include "audio/DirectSoundStream.h"
 #include "audio/SampleFormat.h"
 #include "audio/WasapiStream.h"
+#endif
 #include "core/Denormal.h"
 #include "core/Log.h"
 
@@ -29,18 +33,12 @@ namespace {
 /// period, one period is 22 ms of delay on their own voice.
 constexpr int kTargetPeriodsOfSlack = 2;
 
-double performanceFrequency()
-{
-    LARGE_INTEGER frequency{};
-    ::QueryPerformanceFrequency(&frequency);
-    return static_cast<double>(frequency.QuadPart);
-}
+double performanceFrequency() { return 1.0; }
 
 double performanceCounter()
 {
-    LARGE_INTEGER counter{};
-    ::QueryPerformanceCounter(&counter);
-    return static_cast<double>(counter.QuadPart);
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 } // namespace
@@ -305,6 +303,14 @@ bool Engine::openMonitor(double sourceRate, int sourceChannels)
     // device, and a second ASIO stream would either fail to open or seize the
     // card the main path is already using - failing the monitor is one thing,
     // taking the signal path down with it is another.
+#ifdef __APPLE__
+    if (config_.monitor.backend != BackendType::CoreAudio) {
+        std::lock_guard lock(statusMutex_);
+        status_.monitorError = "Select a CoreAudio monitor device.";
+        return false;
+    }
+    ownedMonitor_ = std::make_unique<CoreAudioOutputStream>();
+#else
     switch (config_.monitor.backend) {
         case BackendType::Wasapi:
             ownedMonitor_ = std::make_unique<WasapiOutputStream>();
@@ -312,7 +318,7 @@ bool Engine::openMonitor(double sourceRate, int sourceChannels)
         case BackendType::DirectSound:
             ownedMonitor_ = std::make_unique<DirectSoundOutputStream>();
             break;
-        case BackendType::Asio: {
+        default: {
             std::lock_guard lock(statusMutex_);
             status_.monitorError = "ASIO cannot be used for monitoring - its drivers "
                                    "open a device exclusively, so a second stream "
@@ -321,6 +327,8 @@ bool Engine::openMonitor(double sourceRate, int sourceChannels)
             return false;
         }
     }
+
+#endif
 
     monitor_ = ownedMonitor_.get();
 
@@ -382,6 +390,19 @@ bool Engine::openMonitor(double sourceRate, int sourceChannels)
 
 bool Engine::createStreams()
 {
+#ifdef __APPLE__
+    if (config_.input.backend != BackendType::CoreAudio ||
+        config_.output.backend != BackendType::CoreAudio) {
+        std::lock_guard lock(statusMutex_);
+        status_.inputError = "Select CoreAudio devices on macOS.";
+        status_.outputError = status_.inputError;
+        return false;
+    }
+    ownedInput_ = std::make_unique<CoreAudioInputStream>();
+    ownedOutput_ = std::make_unique<CoreAudioOutputStream>();
+    input_ = ownedInput_.get();
+    output_ = ownedOutput_.get();
+#else
     const bool asioInput  = (config_.input.backend == BackendType::Asio);
     const bool asioOutput = (config_.output.backend == BackendType::Asio);
 
@@ -434,6 +455,8 @@ bool Engine::createStreams()
             break;
     }
 
+#endif
+
     return input_ != nullptr && output_ != nullptr;
 }
 
@@ -447,8 +470,6 @@ bool Engine::openStreams()
                             config_.input.backend == BackendType::Asio &&
                             config_.output.backend == BackendType::Asio &&
                             config_.input.deviceId == config_.output.deviceId;
-#else
-    const bool asioDuplex = false;
 #endif
 
     // ---- negotiate formats before anything is sized ----------------------
@@ -549,6 +570,10 @@ bool Engine::openStreams()
     status_.inputBufferFrames  = input_->bufferFrames();
     status_.outputBufferFrames = outputPeriod;
 
+#ifdef __APPLE__
+    status_.inputFormat = "32-bit float, CoreAudio";
+    status_.outputFormat = "32-bit float, CoreAudio";
+#else
     if (auto* wasapiIn = dynamic_cast<WasapiInputStream*>(input_)) {
         status_.inputFormat = std::string(toString(wasapiIn->wireFormat())) + ", " +
                               toString(wasapiIn->mode());
@@ -566,6 +591,8 @@ bool Engine::openStreams()
     } else {
         status_.outputFormat = "16-bit int";
     }
+
+#endif
 
     return true;
 }
