@@ -350,7 +350,7 @@ and stops without interrupting what is being sent.
 
 **Noise suppressor.** Leave it around 90%. It removes steady noise — a fan, an
 air conditioner — while you are talking, which the gate cannot do. Taking all
-100% can sound processed in a quiet room. It adds 10 ms of latency while it is
+100% can sound processed in a quiet room. It adds 30 ms of latency while it is
 in the chain, and runs at 48 kHz only.
 
 **Gate.** Talk normally and lower the threshold until the **OPEN/SHUT**

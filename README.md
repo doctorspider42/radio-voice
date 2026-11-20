@@ -119,7 +119,7 @@ hardware. See [macOS packaging](installer/macos/README.md) and
 - **WASAPI shared mode is the tested path.** ASIO and WASAPI exclusive mode are
   implemented but not verified on hardware; DirectSound capture has known issues
   on some interfaces.
-- **Neural noise suppression requires 48 kHz** and adds 10 ms of latency.
+- **Neural noise suppression requires 48 kHz** and adds 30 ms of latency.
 - **MinGW is the supported build toolchain.** MSVC builds have known dependency
   failures. The installer and bundled driver are not Microsoft-signed.
 

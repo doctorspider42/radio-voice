@@ -80,12 +80,6 @@ void NoiseSuppressor::prepare(double sampleRate, int /*maxFrames*/, int channels
 
         channel.input.assign(kFrameSize, 0.0f);
         channel.output.assign(kFrameSize, 0.0f);
-        channel.filled = 0;
-
-        // The output FIFO starts full of silence, which is what turns the
-        // library's frame quantisation into a fixed, honest delay rather than
-        // a gap of unpredictable length at the start of the stream.
-        channel.readAt = 0;
     }
 
     mix_.prepare(static_cast<float>(sampleRate), 20.0f, 1.0f);
@@ -99,10 +93,12 @@ void NoiseSuppressor::reset()
 {
 #if RV_HAS_RNNOISE
     for (auto& channel : channels_) {
+        rnnoise_init(channel.state, nullptr);
         std::fill(channel.input.begin(), channel.input.end(), 0.0f);
         std::fill(channel.output.begin(), channel.output.end(), 0.0f);
+        channel.dryDelay.fill(0.0f);
         channel.filled = 0;
-        channel.readAt = 0;
+        channel.dryAt = 0;
     }
 #endif
 }
@@ -118,10 +114,7 @@ void NoiseSuppressor::process(PlanarBuffer& buffer)
 
     // Switched off still means running, at a mix of zero. The frames keep
     // flowing through the network so its recurrent state stays current, and the
-    // delay stays put because the dry path is held back by a frame whatever the
-    // mix says - both of which would otherwise change under the user the moment
-    // they toggled the switch, which is a click and a second of the model
-    // re-learning the room.
+    // dry path keeps the same delay at every mix setting, including zero.
     const float amount =
         params_.denoiseEnabled.load(std::memory_order_relaxed)
             ? std::clamp(params_.denoiseAmount.load(std::memory_order_relaxed), 0.0f, 1.0f)
@@ -139,36 +132,23 @@ void NoiseSuppressor::process(PlanarBuffer& buffer)
         Smoothed mix = mix_;
 
         for (int i = 0; i < frames; ++i) {
-            // Read before write, and the order is not a matter of taste. The
-            // input fills and the output empties in lockstep, so processing
-            // first would overwrite the last sample of the outgoing frame
-            // before it had been collected - one sample discarded every 480,
-            // which is a click a hundred times a second.
-            const float wet = channel.output[static_cast<size_t>(channel.readAt)] * kFromRnnoise;
-            if (channel.readAt + 1 < kFrameSize)
-                ++channel.readAt;
+            // Input and output advance together. Read wet before processing
+            // a full frame, which overwrites the output buffer.
+            const auto frameIndex = static_cast<size_t>(channel.filled);
+            const float wet = channel.output[frameIndex] * kFromRnnoise;
+            const float dry = channel.dryDelay[channel.dryAt];
+            channel.dryDelay[channel.dryAt] = samples[i];
+            if (++channel.dryAt == channel.dryDelay.size())
+                channel.dryAt = 0;
 
-            // The dry signal has to be delayed by exactly as much as the wet
-            // one, or the mix is a comb filter: the same voice arriving twice,
-            // 10 ms apart, which is heard as a small room rather than as a
-            // blend. That is why any setting short of 100% sounded reverberant.
-            //
-            // No delay line is needed for it. `input[filled]` is the slot about
-            // to be overwritten, so it still holds the sample from a whole
-            // frame ago - which is precisely the sample that produced `wet`,
-            // because `filled` and `readAt` advance together.
-            const float dry = channel.input[static_cast<size_t>(channel.filled)] * kFromRnnoise;
-
-            channel.input[static_cast<size_t>(channel.filled++)] = samples[i] * kToRnnoise;
-
-            if (channel.filled == kFrameSize) {
+            channel.input[frameIndex] = samples[i] * kToRnnoise;
+            if (++channel.filled == kFrameSize) {
                 // Straight into the output buffer: it has just been drained to
                 // its last sample, so there is nothing left in it to protect.
                 const float probability = rnnoise_process_frame(
                     channel.state, channel.output.data(), channel.input.data());
 
                 channel.filled = 0;
-                channel.readAt = 0;
 
                 if (c == 0)
                     speech = probability;

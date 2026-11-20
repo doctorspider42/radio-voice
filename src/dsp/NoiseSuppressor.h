@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -20,12 +21,9 @@ namespace rv::dsp {
 ///
 /// Three properties of the underlying library shape everything here:
 ///
-///  * It works in fixed frames of 480 samples at 48 kHz. Blocks arriving from
-///    the engine are any size at all, so the two are bridged by a FIFO, and the
-///    cost is 480 samples of delay - reported honestly through latencySamples.
-///    The dry side of the mix is delayed by the same frame, so a partial mix
-///    blends two copies of the same instant rather than comb-filtering one
-///    against a 10 ms echo of itself.
+///  * It works in fixed frames of 480 samples at 48 kHz. Buffering arbitrary
+///    engine blocks costs one frame, and RNNoise adds two frames internally.
+///    The dry path and latencySamples() both use the full three-frame delay.
 ///
 ///  * It is mono. Each channel gets its own instance, which is also the only
 ///    correct choice: a shared one would let one channel's noise estimate
@@ -50,7 +48,7 @@ public:
     void reset() override;
     void process(PlanarBuffer& buffer) override;
 
-    int latencySamples() const override { return active_ ? kFrameSize : 0; }
+    int latencySamples() const override { return active_ ? kLatencySamples : 0; }
 
     /// The switch on the panel and the one in the chain list are this one flag.
     bool isEnabled() const override
@@ -74,6 +72,10 @@ private:
     static constexpr int kFrameSize  = 480;
     static constexpr int kSampleRate = 48000;
 
+    /// One frame of analysis/synthesis overlap, one of spectral lookahead,
+    /// and one to collect the input before handing it to RNNoise.
+    static constexpr int kLatencySamples = 3 * kFrameSize;
+
     /// Per-channel state and the FIFOs that turn arbitrary block sizes into
     /// whole frames.
     struct Channel {
@@ -81,7 +83,8 @@ private:
         std::vector<float> input;   ///< Awaiting a full frame.
         std::vector<float> output;  ///< Denoised, awaiting collection.
         int                filled = 0;   ///< Samples gathered towards the next frame.
-        int                readAt = 0;   ///< Next sample to hand back.
+        std::array<float, kLatencySamples> dryDelay{};
+        size_t             dryAt = 0;
     };
 
     void releaseChannels();

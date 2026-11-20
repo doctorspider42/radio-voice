@@ -9,6 +9,15 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.7.2] — 2026-11-20
+
+### Fixed
+
+- **Partial noise suppression no longer adds a room-like echo.** The dry and
+  denoised signals now reach the mix at the same time, so intermediate
+  settings blend the same moment of speech. The suppressor now reports its
+  full 30 ms of latency at 48 kHz.
+
 ## [0.7.1] — 2026-10-31
 
 ### Added
