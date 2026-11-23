@@ -9,6 +9,18 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.7.3] — 2026-11-23
+
+### Fixed
+
+- **RadioVoice stays responsive while VST3 effects load on Windows.** The
+  interface and audio engine can start while saved effects are being restored.
+  Adding effects from the browser also runs in the background.
+- A spinner shows when an effect is loading. If an effect fails or times out
+  during its separate startup check, the rack shows the error and retains the
+  effect's settings. Other effects can finish loading, and the failed entry
+  can be removed from the rack.
+
 ## [0.7.2] — 2026-11-20
 
 ### Fixed

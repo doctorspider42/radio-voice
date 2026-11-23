@@ -28,8 +28,15 @@ struct State {
 
 State& state()
 {
+#ifdef _WIN32
+    // A third-party loader can return after the UI has shut down the log.
+    // Keep its mutex and in-memory state valid until the process exits.
+    static State* const s = new State;
+    return *s;
+#else
     static State s;
     return s;
+#endif
 }
 
 const char* levelTag(Level l)

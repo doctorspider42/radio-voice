@@ -8,15 +8,19 @@ void Chain::prepare(double sampleRate, int maxFrames, int channels)
 {
     std::lock_guard lock(uiMutex_);
 
-    sampleRate_ = sampleRate;
-    maxFrames_  = maxFrames;
-    channels_   = channels;
+    format_ = {sampleRate, maxFrames, channels};
 
     for (auto& node : owned_)
         node->prepare(sampleRate, maxFrames, channels);
 }
 
-void Chain::setNodes(std::vector<NodePtr> nodes)
+Chain::Format Chain::format() const
+{
+    std::lock_guard lock(uiMutex_);
+    return format_;
+}
+
+void Chain::setNodes(std::vector<NodePtr> nodes, const ProcessorNode* prepared)
 {
     std::lock_guard lock(uiMutex_);
 
@@ -24,8 +28,8 @@ void Chain::setNodes(std::vector<NodePtr> nodes)
     for (auto& node : nodes) {
         const bool wasPresent =
             std::find(owned_.begin(), owned_.end(), node) != owned_.end();
-        if (!wasPresent)
-            node->prepare(sampleRate_, maxFrames_, channels_);
+        if (!wasPresent && node.get() != prepared)
+            node->prepare(format_.sampleRate, format_.maxFrames, format_.channels);
     }
 
     // Anything dropped from the chain must outlive the audio thread's current

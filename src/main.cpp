@@ -24,6 +24,7 @@
 #include "core/Paths.h"
 #include "core/Strings.h"
 #include "gui/Theme.h"
+#include "host/vst3/WindowsPluginProbe.h"
 #include "resource.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
@@ -630,6 +631,17 @@ bool hasSwitch(PWSTR commandLine, const wchar_t* name)
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
 {
+    constexpr wchar_t probeSwitch[] = L"--probe-vst3 ";
+    if (commandLine && ::wcsncmp(commandLine, probeSwitch, std::size(probeSwitch) - 1) == 0) {
+        int count = 0;
+        auto arguments = ::CommandLineToArgvW(::GetCommandLineW(), &count);
+        if (!arguments)
+            return 1;
+        const std::filesystem::path request = count == 3 ? arguments[2] : L"";
+        ::LocalFree(arguments);
+        return request.empty() ? 1 : rv::host::runPluginProbe(request);
+    }
+
     // Setting the autostart entry is not a launch: it writes one registry value
     // and leaves, so it is handled before the window, the engine or the
     // single-instance lock exist.
@@ -806,6 +818,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
         }
         if (!running)
             break;
+
+        g_app->servicePluginLoads();
 
         // The icon and its tooltip are maintained here rather than from the
         // frame, because the interesting case is the one where no frame is

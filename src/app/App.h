@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -45,6 +46,9 @@ public:
 
     /// Draws one frame into the current ImGui context.
     void render();
+
+    /// Adopts completed VST3 loads, including while the window is in the tray.
+    void servicePluginLoads();
 
     bool wantsExit() const { return wantsExit_; }
 
@@ -113,6 +117,8 @@ public:
     bool takeUpdateAnnouncement(std::string& version);
 
 private:
+    struct PluginLoad;
+
     // --- shell ------------------------------------------------------------
     //
     // The window is a header, a body and a footer. The body is either the
@@ -136,6 +142,7 @@ private:
     void renderCompressorView(ImVec2 origin, ImVec2 size);
     void renderLimiterView(ImVec2 origin, ImVec2 size);
     void renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size);
+    void renderPluginLoad(const PluginLoad& load, ImVec2 origin, ImVec2 size);
 
     /// Samples the meters into the histories the displays scroll through.
     void sampleHistory();
@@ -192,7 +199,28 @@ private:
 
     // --- chain ------------------------------------------------------------
     void buildChainFromConfig();
-    void publishChain();
+    struct PluginLoad final : dsp::ProcessorNode {
+        struct Request;
+        struct Result;
+
+        PluginLoad(host::PluginDescriptor descriptor, ChainEntryConfig entry);
+
+        dsp::NodeKind kind() const override { return dsp::NodeKind::PendingPlugin; }
+        const std::string& name() const override { return descriptor.name; }
+        void prepare(double, int, int) override {}
+        void reset() override {}
+        void process(dsp::PlanarBuffer&) override {}
+
+        host::PluginDescriptor descriptor;
+        ChainEntryConfig entry;
+        std::shared_ptr<Result> result;
+        std::chrono::steady_clock::time_point started;
+        std::string error;
+    };
+
+    void publishChain(const dsp::ProcessorNode* prepared = nullptr);
+    void startPluginLoad(PluginLoad& load, dsp::Chain::Format format,
+                         std::unique_ptr<host::Vst3Plugin> plugin = {});
     void addPlugin(const host::PluginDescriptor& descriptor);
     void removeNode(size_t index);
     void moveNode(size_t from, size_t to);
@@ -225,6 +253,11 @@ private:
     /// UI-side mirror of the chain, in order. The engine holds borrowed
     /// pointers to the same nodes.
     std::vector<dsp::NodePtr> chainNodes_;
+
+#ifdef _WIN32
+    // A VST3 bundle can share factory and DLL state across its instances.
+    std::unordered_map<std::string, std::weak_ptr<PluginLoad::Request>> loadingBundles_;
+#endif
 
     /// The configuration that is actually running, so the UI can tell the user
     /// when a pending change needs a restart.

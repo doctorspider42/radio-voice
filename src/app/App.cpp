@@ -6,6 +6,14 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <exception>
+#include <thread>
+
+#ifdef _WIN32
+#include <objbase.h>
+
+#include "host/vst3/WindowsPluginProbe.h"
+#endif
 
 #include <imgui.h>
 
@@ -37,6 +45,10 @@ constexpr const char* kReleasesUrl =
 /// Configuration is written at most this often while knobs are moving; the
 /// pending state is always flushed on exit.
 constexpr double kSaveIntervalSeconds = 3.0;
+
+#ifdef _WIN32
+constexpr auto kPluginLoadTimeout = std::chrono::seconds(15);
+#endif
 
 /// Width of gui::toggleSwitch, for right-aligning one on a row.
 float switchWidth() { return ImGui::GetFrameHeight() * 0.72f * 1.85f; }
@@ -389,12 +401,6 @@ void App::startEngine()
     }
 
     runningConfig_ = config_;
-
-    // Plugins were created for whatever rate was current before; the engine may
-    // have negotiated a different one, so the chain is re-prepared for real.
-    const auto status = engine_->status();
-    engine_->chain().prepare(status.outputSampleRate, config_.maxBlockFrames,
-                             config_.internalChannels);
 }
 
 void App::stopEngine()
@@ -413,11 +419,30 @@ void App::restartEngine()
 // Chain
 // ---------------------------------------------------------------------------
 
+struct App::PluginLoad::Result {
+    dsp::Chain::Format format;
+    std::unique_ptr<host::Vst3Plugin> plugin;
+    std::string error;
+    std::atomic<bool> ready{false};
+};
+
+struct App::PluginLoad::Request {
+    std::weak_ptr<Result> result;
+};
+
+App::PluginLoad::PluginLoad(host::PluginDescriptor descriptor, ChainEntryConfig entry)
+    : descriptor(std::move(descriptor)), entry(std::move(entry))
+    , started(std::chrono::steady_clock::now())
+{
+}
+
 void App::buildChainFromConfig()
 {
     chainNodes_.clear();
 
+#ifndef _WIN32
     const double sampleRate = currentSampleRate();
+#endif
 
     // A configuration with no chain at all is a first run; give it the default
     // voice path rather than a bypassed signal.
@@ -450,6 +475,10 @@ void App::buildChainFromConfig()
             descriptor.uid    = entry.pluginUid;
             descriptor.name   = entry.pluginName;
 
+#ifdef _WIN32
+            node = std::make_shared<PluginLoad>(std::move(descriptor), entry);
+#else
+            // macOS plug-ins can use AppKit during initialization.
             std::string error;
             auto plugin = host::Vst3Plugin::create(descriptor, sampleRate,
                                                    config_.maxBlockFrames,
@@ -463,19 +492,13 @@ void App::buildChainFromConfig()
             if (!entry.pluginState.empty())
                 plugin->loadState(entry.pluginState);
 
+            plugin->setBypassed(entry.bypassed);
             node = std::shared_ptr<dsp::ProcessorNode>(plugin.release());
+#endif
         }
 
         if (!node)
             continue;
-
-        // Only a plugin's switch is stored with the chain entry. A built-in
-        // module's lives in the parameter block, which is what both its panel
-        // and the chain list now read - and honouring a `bypassed` written by a
-        // build that kept the two apart would restore the copy the user cannot
-        // see, over the one they can.
-        if (node->kind() == dsp::NodeKind::Vst3Plugin)
-            node->setBypassed(entry.bypassed);
 
         chainNodes_.push_back(std::move(node));
     }
@@ -510,14 +533,23 @@ void App::buildChainFromConfig()
     publishChain();
 }
 
-void App::publishChain()
+void App::publishChain(const dsp::ProcessorNode* prepared)
 {
-    engine_->chain().setNodes(chainNodes_);
+    auto nodes = chainNodes_;
+    std::erase_if(nodes, [](const dsp::NodePtr& node) {
+        return node->kind() == dsp::NodeKind::PendingPlugin;
+    });
+    engine_->chain().setNodes(std::move(nodes), prepared);
     markDirty();
 }
 
 void App::addPlugin(const host::PluginDescriptor& descriptor)
 {
+#ifdef _WIN32
+    ChainEntryConfig entry{"vst3", false, descriptor.path, descriptor.uid, descriptor.name, {}};
+    chainNodes_.push_back(std::make_shared<PluginLoad>(descriptor, std::move(entry)));
+    markDirty();
+#else
     std::string error;
     auto plugin = host::Vst3Plugin::create(descriptor, currentSampleRate(),
                                            config_.maxBlockFrames,
@@ -530,6 +562,128 @@ void App::addPlugin(const host::PluginDescriptor& descriptor)
 
     chainNodes_.push_back(std::shared_ptr<dsp::ProcessorNode>(plugin.release()));
     publishChain();
+#endif
+}
+
+#ifdef _WIN32
+void App::startPluginLoad(PluginLoad& load, dsp::Chain::Format format,
+                          std::unique_ptr<host::Vst3Plugin> plugin)
+{
+    auto result = std::make_shared<PluginLoad::Result>();
+    result->format = format;
+    load.result = result;
+    load.started = std::chrono::steady_clock::now();
+    auto request = std::make_shared<PluginLoad::Request>();
+    request->result = result;
+    loadingBundles_[load.descriptor.path] = request;
+
+    try {
+        // The worker owns its inputs and only publishes to a live request.
+        // A plugin may never return, so neither removal nor exit joins it.
+        RV_INFO("loading VST3: \"%s\"", load.name().c_str());
+        std::thread([request = std::move(request), descriptor = load.descriptor,
+                     entry = load.entry, format, plugin = std::move(plugin)]() mutable {
+            const HRESULT comStatus = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+            std::string error;
+            try {
+                if (FAILED(comStatus)) {
+                    error = "could not initialize COM for the plugin";
+                } else if (plugin) {
+                    plugin->prepare(format.sampleRate, format.maxFrames, format.channels);
+                } else {
+                    error = host::probePlugin(descriptor, format, entry.pluginState);
+                    if (error.empty() && !request->result.expired()) {
+                        plugin = host::Vst3Plugin::create(descriptor, format.sampleRate,
+                                                          format.maxFrames, format.channels, error);
+                        if (plugin && !entry.pluginState.empty() && !plugin->loadState(entry.pluginState))
+                            error = "The plugin could not restore its saved settings.";
+                    }
+                }
+            } catch (const std::exception& e) {
+                error = e.what();
+            } catch (...) {
+                error = "the plugin raised an unexpected error";
+            }
+
+            auto completed = request->result.lock();
+            if (!completed || !error.empty())
+                plugin.reset();
+            if (SUCCEEDED(comStatus))
+                ::CoUninitialize();
+            if (completed) {
+                completed->plugin = std::move(plugin);
+                completed->error = std::move(error);
+                completed->ready.store(true, std::memory_order_release);
+            }
+        }).detach();
+    } catch (const std::exception& e) {
+        load.result.reset();
+        load.error = e.what();
+        RV_ERROR("could not start loading VST3 \"%s\": %s", load.name().c_str(), e.what());
+    }
+}
+#endif
+
+void App::servicePluginLoads()
+{
+#ifdef _WIN32
+    if (!engine_)
+        return;
+
+    const auto format = engine_->chain().format();
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& node : chainNodes_) {
+        if (node->kind() != dsp::NodeKind::PendingPlugin)
+            continue;
+
+        auto& load = static_cast<PluginLoad&>(*node);
+        if (!load.error.empty())
+            continue;
+        const auto bundle = loadingBundles_.find(load.descriptor.path);
+        const bool bundleBusy = bundle != loadingBundles_.end() && !bundle->second.expired();
+        if (!load.result) {
+            if (!bundleBusy) {
+                startPluginLoad(load, format);
+            } else if (now - load.started >= kPluginLoadTimeout) {
+                load.error = "Another instance from this VST3 bundle is still loading.";
+                RV_ERROR("could not load VST3 \"%s\": %s", load.name().c_str(), load.error.c_str());
+            }
+            continue;
+        }
+
+        auto& result = *load.result;
+        if (!result.ready.load(std::memory_order_acquire)) {
+            if (now - load.started < kPluginLoadTimeout)
+                continue;
+            load.error = "The plugin did not finish loading within 15 seconds.";
+        } else if (!result.plugin) {
+            load.error = result.error.empty() ? "The plugin could not be loaded." : result.error;
+        } else {
+            // A settings change may have reopened the audio devices while the
+            // plugin was loading. Prepare for the new format before publishing.
+            if (result.format != format) {
+                if (!bundleBusy) {
+                    auto plugin = std::move(result.plugin);
+                    startPluginLoad(load, format, std::move(plugin));
+                }
+                continue;
+            }
+            result.plugin->setBypassed(load.entry.bypassed);
+            if (selectedUnit_ == load.id())
+                selectedUnit_ = result.plugin->id();
+            if (dragNodeId_ == load.id())
+                dragNodeId_ = result.plugin->id();
+            unitY_.erase(load.id());
+            auto plugin = std::shared_ptr<dsp::ProcessorNode>(std::move(result.plugin));
+            node = std::move(plugin);
+            publishChain(node.get());
+            continue;
+        }
+
+        RV_ERROR("could not load VST3 \"%s\": %s", load.name().c_str(), load.error.c_str());
+        load.result.reset();
+    }
+#endif
 }
 
 void App::removeNode(size_t index)
@@ -575,6 +729,9 @@ void App::captureChainToConfig()
         entry.bypassed = node->isBypassed();
 
         switch (node->kind()) {
+            case dsp::NodeKind::PendingPlugin:
+                entry = static_cast<const PluginLoad&>(*node).entry;
+                break;
             case dsp::NodeKind::NoiseSuppressor:
                 entry.kind = "denoise";
                 break;

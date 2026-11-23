@@ -34,6 +34,14 @@ using NodePtr = std::shared_ptr<ProcessorNode>;
 /// borrowed pointers whose lifetime step 3 guarantees.
 class Chain {
 public:
+    struct Format {
+        double sampleRate = 48000.0;
+        int maxFrames = 256;
+        int channels = 2;
+
+        bool operator==(const Format&) const = default;
+    };
+
     Chain() = default;
     ~Chain() = default;
 
@@ -45,10 +53,12 @@ public:
     /// Prepares every node for a new stream format. The engine stops the audio
     /// thread around this.
     void prepare(double sampleRate, int maxFrames, int channels);
+    Format format() const;
 
     /// Replaces the chain contents and order. Nodes absent from `nodes` are
     /// released once the audio thread has demonstrably moved on.
-    void setNodes(std::vector<NodePtr> nodes);
+    /// `prepared`, if supplied, already matches the chain's current format.
+    void setNodes(std::vector<NodePtr> nodes, const ProcessorNode* prepared = nullptr);
 
     /// Snapshot for the UI to render and reorder.
     std::vector<NodePtr> nodes() const;
@@ -96,9 +106,7 @@ private:
     std::vector<NodePtr>                 graveyard_;
     u64                                  publishMark_ = 0;
 
-    double sampleRate_ = 48000.0;
-    int    maxFrames_  = 256;
-    int    channels_   = 2;
+    Format format_;
 };
 
 } // namespace rv::dsp

@@ -789,6 +789,37 @@ void App::renderNotices()
     };
     std::vector<Notice> notices;
 
+    const float pad = px(20.0f);
+    size_t loading = 0;
+    size_t failed = 0;
+    for (const auto& node : chainNodes_) {
+        if (node->kind() == dsp::NodeKind::PendingPlugin) {
+            if (static_cast<const PluginLoad&>(*node).error.empty())
+                ++loading;
+            else
+                ++failed;
+        }
+    }
+
+    if (loading) {
+        ImGui::Dummy(ImVec2(0.0f, px(8.0f)));
+        ImGui::SetCursorPosX(pad);
+        const ImVec2 top = ImGui::GetCursorScreenPos();
+        const float radius = px(5.0f);
+        const float t = static_cast<float>(ImGui::GetTime()) * 6.0f;
+        const ImVec2 centre(top.x + radius + px(1.0f), top.y + ImGui::GetTextLineHeight() * 0.5f);
+        auto* draw = ImGui::GetWindowDrawList();
+        draw->AddCircle(centre, radius, theme::kBorderBright);
+        draw->PathArcTo(centre, radius, t, t + 4.2f, 20);
+        draw->PathStroke(theme::kAccentLight, px(2.0f));
+        ImGui::Dummy(ImVec2(px(16.0f), ImGui::GetTextLineHeight()));
+        ImGui::SameLine(0.0f, px(4.0f));
+        ImGui::TextDisabled("Loading VST3 plugins (%zu)", loading);
+    }
+    if (failed)
+        notices.push_back({theme::kDanger, failed == 1 ? "A VST3 plugin failed to load. See the rack."
+                                                        : "VST3 plugins failed to load. See the rack.", false});
+
     if (!startupError_.empty())
         notices.push_back({theme::kDanger, startupError_, true});
 
@@ -810,7 +841,6 @@ void App::renderNotices()
     if (notices.empty())
         return;
 
-    const float pad = px(20.0f);
     ImGui::Dummy(ImVec2(0.0f, px(8.0f)));
     for (const auto& notice : notices) {
         ImGui::SetCursorPosX(pad);
@@ -1070,12 +1100,12 @@ void App::renderRack(ImVec2 size)
         draw->PopClipRect();
 
         pushFont(fonts_.mono);
-        const char* readout = face.enabled ? face.readout : "OFF";
+        const char* readout = face.enabled || !toggle ? face.readout : "OFF";
         const ImVec2 rs = ImGui::CalcTextSize(readout);
         draw->AddRectFilled(ImVec2(d1.x - rs.x - px(8.0f), d1.y - rs.y - px(3.0f)), ImVec2(d1.x - 1, d1.y - 1),
                             theme::withAlpha(theme::kInset, 0.75f), px(4.0f));
         draw->AddText(ImVec2(d1.x - rs.x - px(5.0f), d1.y - rs.y - px(2.0f)),
-                      face.enabled ? face.readoutColour : theme::kTextFaint, readout);
+                      face.enabled || !toggle ? face.readoutColour : theme::kTextFaint, readout);
         ImGui::PopFont();
 
         // Power.
@@ -1083,10 +1113,12 @@ void App::renderRack(ImVec2 size)
                       IM_COL32(0x07, 0x09, 0x0C, 0xFF));
         const float powerSize = px(26.0f);
         ImGui::SetCursorScreenPos(ImVec2(b.x - powerArea * 0.5f - powerSize * 0.5f, a.y + (rowHeight - powerSize) * 0.5f));
-        if (powerButton("##power", toggle ? *toggle : face.enabled, powerSize) && toggle)
-            *toggle = !*toggle;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(face.enabled ? "On - click to switch it off" : "Switched off");
+        if (toggle) {
+            if (powerButton("##power", *toggle, powerSize))
+                *toggle = !*toggle;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(face.enabled ? "On - click to switch it off" : "Switched off");
+        }
 
         ImGui::SetCursorScreenPos(ImVec2(a.x, b.y + ImGui::GetStyle().ItemSpacing.y));
         ImGui::PopID();
@@ -1145,6 +1177,16 @@ void App::renderRack(ImVec2 size)
                 std::snprintf(face.readout, sizeof(face.readout), "VST3");
                 break;
             }
+            case dsp::NodeKind::PendingPlugin: {
+                const auto& load = static_cast<const PluginLoad&>(*node);
+                face.name = upper(load.name());
+                face.kind = "VST3 PLUGIN";
+                face.enabled = false;
+                face.readoutColour = load.error.empty() ? theme::kTextDim : theme::kDanger;
+                std::snprintf(face.readout, sizeof(face.readout), "%s",
+                              load.error.empty() ? "LOADING" : "FAILED");
+                break;
+            }
         }
         return face;
     };
@@ -1187,7 +1229,8 @@ void App::renderRack(ImVec2 size)
 
         bool enabled = node->isEnabled();
         const bool before = enabled;
-        drawUnit(node->id(), face, true, &enabled, i);
+        drawUnit(node->id(), face, true,
+                 node->kind() == dsp::NodeKind::PendingPlugin ? nullptr : &enabled, i);
         if (enabled != before) {
             node->setEnabled(enabled);
             markDirty();
@@ -1281,6 +1324,9 @@ void App::renderModuleView(ImVec2 size)
             case dsp::NodeKind::Compressor:      renderCompressorView(origin, area); break;
             case dsp::NodeKind::Vst3Plugin:
                 renderPluginView(static_cast<host::Vst3Plugin*>(node), origin, area);
+                break;
+            case dsp::NodeKind::PendingPlugin:
+                renderPluginLoad(static_cast<const PluginLoad&>(*node), origin, area);
                 break;
         }
     }
@@ -2332,6 +2378,31 @@ void App::renderLimiterView(ImVec2 origin, ImVec2 size)
 
     footerText(fonts_, frame.footerText,
                "Catches overshoots before the output, where the receiving application could not undo them.");
+}
+
+void App::renderPluginLoad(const PluginLoad& load, ImVec2 origin, ImVec2 size)
+{
+    const std::string name = upper(load.name());
+    ModuleFrame frame = drawModuleFrame(fonts_, origin, size, name.c_str(), "VST3 PLUGIN", false, dpiScale_);
+    frame.controls.next(chipWidth(fonts_.caps, "REMOVE"), ImGui::GetFrameHeight() * 0.86f);
+    const bool remove = chipButton("REMOVE", false);
+
+    ImGui::SetCursorScreenPos(frame.bodyMin);
+    if (load.error.empty()) {
+        ImGui::TextDisabled("Loading plugin...");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + frame.width());
+        ImGui::TextWrapped("%s", load.error.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+
+    if (remove) {
+        const auto entry = std::find_if(chainNodes_.begin(), chainNodes_.end(),
+            [&load](const dsp::NodePtr& node) { return node.get() == &load; });
+        removeNode(static_cast<size_t>(entry - chainNodes_.begin()));
+    }
 }
 
 void App::renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size)

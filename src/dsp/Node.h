@@ -13,6 +13,7 @@ enum class NodeKind {
     Equalizer,
     Compressor,
     Vst3Plugin,
+    PendingPlugin,
 };
 
 /// One stage of the reorderable processing chain.
