@@ -163,6 +163,10 @@ Config Config::load()
             config.chain.push_back(std::move(node));
     }
 
+    for (const auto& uid : root.value("suspendedEditors", json::array()))
+        if (uid.is_string())
+            config.suspendedEditors.push_back(uid.get<std::string>());
+
     return config;
 }
 
@@ -244,6 +248,7 @@ void Config::save() const
                              {"pluginState", node.pluginState}});
     }
     root["chain"] = std::move(chainJson);
+    root["suspendedEditors"] = suspendedEditors;
 
     std::ofstream file(paths::configFile(), std::ios::trunc);
     if (!file) {

@@ -142,7 +142,7 @@ private:
     void renderCompressorView(ImVec2 origin, ImVec2 size);
     void renderLimiterView(ImVec2 origin, ImVec2 size);
     void renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size);
-    void renderPluginLoad(const PluginLoad& load, ImVec2 origin, ImVec2 size);
+    void renderPluginLoad(PluginLoad& load, ImVec2 origin, ImVec2 size);
 
     /// Samples the meters into the histories the displays scroll through.
     void sampleHistory();
@@ -219,8 +219,7 @@ private:
     };
 
     void publishChain(const dsp::ProcessorNode* prepared = nullptr);
-    void startPluginLoad(PluginLoad& load, dsp::Chain::Format format,
-                         std::unique_ptr<host::Vst3Plugin> plugin = {});
+    void startPluginLoad(PluginLoad& load, dsp::Chain::Format format);
     void addPlugin(const host::PluginDescriptor& descriptor);
     void removeNode(size_t index);
     void moveNode(size_t from, size_t to);
@@ -321,6 +320,15 @@ private:
 
     /// Plugin whose editor could not be docked, so it is not retried every frame.
     host::Vst3Plugin* embedFailed_ = nullptr;
+
+    /// Whether `plugin`'s own editor hung or crashed RadioVoice before, and is
+    /// replaced by its parameter list until the user tries it again.
+    bool editorSuspended(const host::Vst3Plugin& plugin) const;
+    void resumeEditor(const host::Vst3Plugin& plugin);
+
+    /// Class id of a plugin the previous session died loading. It is left out
+    /// of the chain this time, with its settings kept, until it is retried.
+    std::string suspendedLoad_;
 
     /// Where each rack unit is drawn, by node id, easing towards its slot.
     std::unordered_map<u64, float> unitY_;

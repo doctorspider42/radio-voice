@@ -49,6 +49,11 @@ struct Config {
 
     std::vector<ChainEntryConfig> chain;
 
+    /// Class ids of VST3 plugins whose own editor hung or crashed RadioVoice.
+    /// They show the generic parameter list until the user asks to try the
+    /// editor again.
+    std::vector<std::string> suspendedEditors;
+
     int windowWidth  = 1360;
     int windowHeight = 840;
 

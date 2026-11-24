@@ -27,6 +27,7 @@
 #include "dsp/NoiseSuppressor.h"
 #include "dsp/Smoothing.h"
 #include "gui/EqEditor.h"
+#include "host/PluginGuard.h"
 #include "gui/Widgets.h"
 
 namespace rv::app {
@@ -79,6 +80,25 @@ bool App::initialize(void* mainWindow, const gui::Fonts& fonts, float dpiScale,
 
     config_ = std::move(loaded);
     config_.applyTo(params_);
+
+    // A plugin that took the previous session down with it - a crash, or a
+    // hang the user had to end - is kept from doing it again straight away.
+    if (const auto incident = host::guard::takeLeftover()) {
+        if (incident->stage == host::guard::Stage::Editor) {
+            RV_WARN("the editor of VST3 \"%s\" did not return last time; showing its parameters instead",
+                    incident->name.c_str());
+            if (std::find(config_.suspendedEditors.begin(), config_.suspendedEditors.end(), incident->uid) ==
+                config_.suspendedEditors.end())
+                config_.suspendedEditors.push_back(incident->uid);
+            // Written straight away: the marker is gone now, and a session
+            // ended before the next save must not forget the plugin again.
+            config_.save();
+        } else {
+            RV_WARN("VST3 \"%s\" did not finish loading last time; leaving it out", incident->name.c_str());
+            suspendedLoad_ = incident->uid;
+        }
+    }
+    host::guard::startWatchdog();
 
     engine_ = std::make_unique<audio::Engine>(params_, meters_);
 
@@ -419,9 +439,9 @@ void App::restartEngine()
 // Chain
 // ---------------------------------------------------------------------------
 
+/// What the out-of-process check reported. The plugin itself is never made on
+/// the worker: see servicePluginLoads.
 struct App::PluginLoad::Result {
-    dsp::Chain::Format format;
-    std::unique_ptr<host::Vst3Plugin> plugin;
     std::string error;
     std::atomic<bool> ready{false};
 };
@@ -476,7 +496,11 @@ void App::buildChainFromConfig()
             descriptor.name   = entry.pluginName;
 
 #ifdef _WIN32
-            node = std::make_shared<PluginLoad>(std::move(descriptor), entry);
+            auto load = std::make_shared<PluginLoad>(std::move(descriptor), entry);
+            if (!suspendedLoad_.empty() && entry.pluginUid == suspendedLoad_)
+                load->error = "RadioVoice stopped while this plugin was loading last time, so it was left "
+                              "out. Its settings are kept.";
+            node = std::move(load);
 #else
             // macOS plug-ins can use AppKit during initialization.
             std::string error;
@@ -566,11 +590,9 @@ void App::addPlugin(const host::PluginDescriptor& descriptor)
 }
 
 #ifdef _WIN32
-void App::startPluginLoad(PluginLoad& load, dsp::Chain::Format format,
-                          std::unique_ptr<host::Vst3Plugin> plugin)
+void App::startPluginLoad(PluginLoad& load, dsp::Chain::Format format)
 {
     auto result = std::make_shared<PluginLoad::Result>();
-    result->format = format;
     load.result = result;
     load.started = std::chrono::steady_clock::now();
     auto request = std::make_shared<PluginLoad::Request>();
@@ -578,40 +600,27 @@ void App::startPluginLoad(PluginLoad& load, dsp::Chain::Format format,
     loadingBundles_[load.descriptor.path] = request;
 
     try {
-        // The worker owns its inputs and only publishes to a live request.
-        // A plugin may never return, so neither removal nor exit joins it.
+        // Only the separate-process check runs on the worker. The plugin itself
+        // is created afterwards on the window's thread, as VST3 requires: a
+        // framework such as JUCE adopts whichever thread first instantiates it
+        // as its message thread, and an editor later created on any other one
+        // waits for that long-gone thread forever.
+        //
+        // The worker owns its inputs and only publishes to a live request. A
+        // check may never return, so neither removal nor exit joins it.
         RV_INFO("loading VST3: \"%s\"", load.name().c_str());
         std::thread([request = std::move(request), descriptor = load.descriptor,
-                     entry = load.entry, format, plugin = std::move(plugin)]() mutable {
-            const HRESULT comStatus = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+                     state = load.entry.pluginState, format]() mutable {
             std::string error;
             try {
-                if (FAILED(comStatus)) {
-                    error = "could not initialize COM for the plugin";
-                } else if (plugin) {
-                    plugin->prepare(format.sampleRate, format.maxFrames, format.channels);
-                } else {
-                    error = host::probePlugin(descriptor, format, entry.pluginState);
-                    if (error.empty() && !request->result.expired()) {
-                        plugin = host::Vst3Plugin::create(descriptor, format.sampleRate,
-                                                          format.maxFrames, format.channels, error);
-                        if (plugin && !entry.pluginState.empty() && !plugin->loadState(entry.pluginState))
-                            error = "The plugin could not restore its saved settings.";
-                    }
-                }
+                error = host::probePlugin(descriptor, format, state);
             } catch (const std::exception& e) {
                 error = e.what();
             } catch (...) {
-                error = "the plugin raised an unexpected error";
+                error = "the plugin check raised an unexpected error";
             }
 
-            auto completed = request->result.lock();
-            if (!completed || !error.empty())
-                plugin.reset();
-            if (SUCCEEDED(comStatus))
-                ::CoUninitialize();
-            if (completed) {
-                completed->plugin = std::move(plugin);
+            if (auto completed = request->result.lock()) {
                 completed->error = std::move(error);
                 completed->ready.store(true, std::memory_order_release);
             }
@@ -632,6 +641,7 @@ void App::servicePluginLoads()
 
     const auto format = engine_->chain().format();
     const auto now = std::chrono::steady_clock::now();
+    bool createdThisPass = false;
     for (auto& node : chainNodes_) {
         if (node->kind() != dsp::NodeKind::PendingPlugin)
             continue;
@@ -656,34 +666,60 @@ void App::servicePluginLoads()
             if (now - load.started < kPluginLoadTimeout)
                 continue;
             load.error = "The plugin did not finish loading within 15 seconds.";
-        } else if (!result.plugin) {
-            load.error = result.error.empty() ? "The plugin could not be loaded." : result.error;
+        } else if (!result.error.empty()) {
+            load.error = result.error;
+        } else if (createdThisPass) {
+            // One instantiation per pass, so a chain of slow plugins still lets
+            // frames out in between.
+            continue;
         } else {
-            // A settings change may have reopened the audio devices while the
-            // plugin was loading. Prepare for the new format before publishing.
-            if (result.format != format) {
-                if (!bundleBusy) {
-                    auto plugin = std::move(result.plugin);
-                    startPluginLoad(load, format, std::move(plugin));
+            createdThisPass = true;
+            std::string error;
+            std::unique_ptr<host::Vst3Plugin> plugin;
+            {
+                const host::guard::Scope guarded(load.descriptor.uid, load.name(), host::guard::Stage::Load);
+                plugin = host::Vst3Plugin::create(load.descriptor, format.sampleRate, format.maxFrames,
+                                                  format.channels, error);
+                if (plugin && !load.entry.pluginState.empty() && !plugin->loadState(load.entry.pluginState)) {
+                    error = "The plugin could not restore its saved settings.";
+                    plugin.reset();
                 }
+            }
+
+            if (plugin) {
+                plugin->setBypassed(load.entry.bypassed);
+                if (selectedUnit_ == load.id())
+                    selectedUnit_ = plugin->id();
+                if (dragNodeId_ == load.id())
+                    dragNodeId_ = plugin->id();
+                unitY_.erase(load.id());
+                node = std::shared_ptr<dsp::ProcessorNode>(std::move(plugin));
+                publishChain(node.get());
                 continue;
             }
-            result.plugin->setBypassed(load.entry.bypassed);
-            if (selectedUnit_ == load.id())
-                selectedUnit_ = result.plugin->id();
-            if (dragNodeId_ == load.id())
-                dragNodeId_ = result.plugin->id();
-            unitY_.erase(load.id());
-            auto plugin = std::shared_ptr<dsp::ProcessorNode>(std::move(result.plugin));
-            node = std::move(plugin);
-            publishChain(node.get());
-            continue;
+            load.error = error.empty() ? "The plugin could not be loaded." : error;
         }
 
         RV_ERROR("could not load VST3 \"%s\": %s", load.name().c_str(), load.error.c_str());
         load.result.reset();
     }
 #endif
+}
+
+bool App::editorSuspended(const host::Vst3Plugin& plugin) const
+{
+    const auto& uid = plugin.descriptor().uid;
+    return std::find(config_.suspendedEditors.begin(), config_.suspendedEditors.end(), uid) !=
+           config_.suspendedEditors.end();
+}
+
+void App::resumeEditor(const host::Vst3Plugin& plugin)
+{
+    std::erase(config_.suspendedEditors, plugin.descriptor().uid);
+    if (embedFailed_ == &plugin)
+        embedFailed_ = nullptr;
+    pluginShowsParameters_ = false;
+    markDirty();
 }
 
 void App::removeNode(size_t index)

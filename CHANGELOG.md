@@ -9,6 +9,27 @@ The section whose heading matches the `VERSION` file becomes the GitHub release
 description word for word, so it is written for whoever is deciding whether to
 download the installer.
 
+## [0.8.0] — 2026-11-24
+
+### Fixed
+
+- **Opening the editor of some VST3 effects no longer freezes RadioVoice.**
+  Since 0.7.3, effects were created on a background thread. Plugins built on
+  frameworks such as JUCE (Klevgrand's Degrader among them) adopt the thread
+  that creates them as their own, so their editor later waited forever for a
+  thread that was gone. Effects are now created on the window's thread again;
+  only the separate startup check still runs in the background.
+
+### Added
+
+- **A misbehaving plugin no longer takes the whole session with it.** If an
+  effect's editor stops responding for 10 seconds, RadioVoice offers to restart
+  without it. After a hang or a crash inside a plugin, the next launch shows
+  that effect's parameter list instead of its editor, with a warning badge in
+  the rack and a button to try the editor again. An effect that took RadioVoice
+  down while loading is left out of the chain, with its settings kept.
+- Effects that fail to load have a **Try again** button.
+
 ## [0.7.3] — 2026-11-23
 
 ### Fixed

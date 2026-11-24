@@ -29,6 +29,7 @@
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/utility/uid.h"
 
+#include "host/PluginGuard.h"
 #include "host/vst3/Vst3Editor.h"
 
 using namespace Steinberg;
@@ -711,6 +712,7 @@ bool Vst3Plugin::openEditor(void* ownerWindow)
     // serve two at once.
     impl.embedded.reset();
 
+    const guard::Scope guarded(impl.descriptor.uid, impl.displayName, guard::Stage::Editor);
     IPtr<IPlugView> view = owned(impl.controller->createView(Vst::ViewType::kEditor));
     if (!view) {
         RV_INFO("VST3 \"%s\" has no editor of its own; use the parameter list",
@@ -757,6 +759,9 @@ bool Vst3Plugin::showEmbeddedEditor(void* parentWindow, int x, int y, int areaWi
         return false;
 
     if (!impl.embedded) {
+        // Creating and attaching the view is where an editor that is going to
+        // hang does it; the first fit below is part of the same first showing.
+        const guard::Scope guarded(impl.descriptor.uid, impl.displayName, guard::Stage::Editor);
         IPtr<IPlugView> view = owned(impl.controller->createView(Vst::ViewType::kEditor));
         if (!view)
             return false;
@@ -765,6 +770,7 @@ bool Vst3Plugin::showEmbeddedEditor(void* parentWindow, int x, int y, int areaWi
         if (!window->openChild(view, static_cast<NativeEditorParent>(parentWindow)))
             return false;
         impl.embedded = std::move(window);
+        impl.embedded->fit(areaWidth, areaHeight);
     }
 
     impl.embedded->fit(areaWidth, areaHeight);

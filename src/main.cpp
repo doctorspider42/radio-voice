@@ -14,6 +14,7 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 
+#include <cwchar>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -24,6 +25,7 @@
 #include "core/Paths.h"
 #include "core/Strings.h"
 #include "gui/Theme.h"
+#include "host/PluginGuard.h"
 #include "host/vst3/WindowsPluginProbe.h"
 #include "resource.h"
 
@@ -676,6 +678,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
     //
     // Local\ rather than Global\: two users signed in at once each get their
     // own RadioVoice, which is the right answer for a per-user microphone.
+    //
+    // The copy the plugin watchdog starts is the exception: its predecessor is
+    // on its way out, so it waits for that instead of deferring to it.
+    if (const wchar_t* afterHang = commandLine ? ::wcsstr(commandLine, L"--after-hang ") : nullptr)
+        rv::host::guard::waitForProcess(std::wcstoul(afterHang + 13, nullptr, 10), 10000);
+
     HANDLE instanceLock = ::CreateMutexW(nullptr, TRUE, L"Local\\RadioVoiceSingleInstance");
     if (instanceLock && ::GetLastError() == ERROR_ALREADY_EXISTS) {
         ::PostMessageW(HWND_BROADCAST, g_showWindowMessage, 0, 0);

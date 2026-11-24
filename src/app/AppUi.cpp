@@ -970,6 +970,9 @@ void App::renderRack(ImVec2 size)
         ImU32       colour  = theme::kAccentLight;
         char        readout[24] = {};
         ImU32       readoutColour = theme::kAccentLight;
+        /// Something about the unit needs the user's attention; it carries a
+        /// warning badge, and `warningTip` says what when hovered.
+        const char* warningTip = nullptr;
     };
 
     auto drawUnit = [&](u64 id, const Face& face, bool selectable, bool* toggle, size_t index) {
@@ -1108,6 +1111,19 @@ void App::renderRack(ImVec2 size)
                       face.enabled || !toggle ? face.readoutColour : theme::kTextFaint, readout);
         ImGui::PopFont();
 
+        // Warning badge on the display well's top-left corner, over the trace.
+        if (face.warningTip) {
+            const float  r = px(8.0f);
+            const ImVec2 c(d0.x + r + px(3.0f), d0.y + r + px(3.0f));
+            draw->AddCircleFilled(c, r + px(1.5f), IM_COL32(0x12, 0x15, 0x19, 0xFF));
+            draw->AddCircleFilled(c, r, theme::kDanger);
+            draw->AddRectFilled(ImVec2(c.x - px(1.1f), c.y - r * 0.58f), ImVec2(c.x + px(1.1f), c.y + r * 0.16f),
+                                IM_COL32(0xFF, 0xFF, 0xFF, 0xFF), px(1.0f));
+            draw->AddCircleFilled(ImVec2(c.x, c.y + r * 0.46f), px(1.3f), IM_COL32(0xFF, 0xFF, 0xFF, 0xFF));
+            if (!dragging && ImGui::IsMouseHoveringRect(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r)))
+                ImGui::SetTooltip("%s", face.warningTip);
+        }
+
         // Power.
         draw->AddLine(ImVec2(b.x - powerArea, a.y + px(8.0f)), ImVec2(b.x - powerArea, b.y - px(8.0f)),
                       IM_COL32(0x07, 0x09, 0x0C, 0xFF));
@@ -1175,6 +1191,9 @@ void App::renderRack(ImVec2 size)
                 face.colour  = theme::kTextFaint;
                 face.readoutColour = theme::kTextDim;
                 std::snprintf(face.readout, sizeof(face.readout), "VST3");
+                if (plugin->hasEditor() && editorSuspended(*plugin))
+                    face.warningTip = "Its editor stopped responding last time. The parameter list is shown "
+                                      "instead; open the plugin to try the editor again.";
                 break;
             }
             case dsp::NodeKind::PendingPlugin: {
@@ -1185,6 +1204,9 @@ void App::renderRack(ImVec2 size)
                 face.readoutColour = load.error.empty() ? theme::kTextDim : theme::kDanger;
                 std::snprintf(face.readout, sizeof(face.readout), "%s",
                               load.error.empty() ? "LOADING" : "FAILED");
+                if (!load.error.empty())
+                    face.warningTip = "This plugin could not be loaded and is left out of the chain. "
+                                      "Open it to see why, or to try again.";
                 break;
             }
         }
@@ -1326,7 +1348,7 @@ void App::renderModuleView(ImVec2 size)
                 renderPluginView(static_cast<host::Vst3Plugin*>(node), origin, area);
                 break;
             case dsp::NodeKind::PendingPlugin:
-                renderPluginLoad(static_cast<const PluginLoad&>(*node), origin, area);
+                renderPluginLoad(static_cast<PluginLoad&>(*node), origin, area);
                 break;
         }
     }
@@ -2380,12 +2402,24 @@ void App::renderLimiterView(ImVec2 origin, ImVec2 size)
                "Catches overshoots before the output, where the receiving application could not undo them.");
 }
 
-void App::renderPluginLoad(const PluginLoad& load, ImVec2 origin, ImVec2 size)
+void App::renderPluginLoad(PluginLoad& load, ImVec2 origin, ImVec2 size)
 {
     const std::string name = upper(load.name());
     ModuleFrame frame = drawModuleFrame(fonts_, origin, size, name.c_str(), "VST3 PLUGIN", false, dpiScale_);
     frame.controls.next(chipWidth(fonts_.caps, "REMOVE"), ImGui::GetFrameHeight() * 0.86f);
     const bool remove = chipButton("REMOVE", false);
+    if (!load.error.empty()) {
+        frame.controls.next(chipWidth(fonts_.caps, "TRY AGAIN"), ImGui::GetFrameHeight() * 0.86f);
+        if (chipButton("TRY AGAIN", true)) {
+            if (load.entry.pluginUid == suspendedLoad_)
+                suspendedLoad_.clear();
+            load.error.clear();
+            load.result.reset();
+            load.started = std::chrono::steady_clock::now();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Load the plugin again with its saved settings");
+    }
 
     ImGui::SetCursorScreenPos(frame.bodyMin);
     if (load.error.empty()) {
@@ -2420,8 +2454,12 @@ void App::renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size)
         if (chainNodes_[i].get() == static_cast<dsp::ProcessorNode*>(plugin))
             index = i;
 
-    const bool hasEditor = plugin->hasEditor();
+    // An editor that hung or crashed RadioVoice before is not created again
+    // until the user asks: the parameter list stands in for it meanwhile.
+    const bool suspended = plugin->hasEditor() && editorSuspended(*plugin);
+    const bool hasEditor = plugin->hasEditor() && !suspended;
     bool removeRequested = false;
+    bool resumeRequested = false;
 
     {
         const bool  enabled   = plugin->isEnabled();
@@ -2472,9 +2510,40 @@ void App::renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size)
         // The generic list, for a plugin without an editor of its own or when
         // the user prefers one place for every control.
         inspectedPlugin_ = plugin;
-        ImGui::SetCursorScreenPos(a);
+        float top = a.y;
+        if (suspended) {
+            const float  barH = ImGui::GetFrameHeight() * 1.6f;
+            const ImVec2 bar1(b.x, a.y + barH);
+            draw->AddRectFilled(a, bar1, theme::withAlpha(theme::kDanger, 0.12f), px(8.0f));
+            draw->AddRect(a, bar1, theme::withAlpha(theme::kDanger, 0.45f), px(8.0f), 1.2f);
+
+            const char* action  = "TRY THE EDITOR AGAIN";
+            const float actionW = chipWidth(fonts_.caps, action);
+            const char* text    = "This plugin's editor stopped responding last time, so its parameters are "
+                                  "shown instead. The sound is not affected.";
+            ImGui::SetCursorScreenPos(ImVec2(a.x + px(14.0f), a.y + (barH - ImGui::GetTextLineHeight()) * 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::toVec4(theme::kDanger));
+            ImGui::TextUnformatted("!");
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0.0f, px(10.0f));
+            ImGui::PushClipRect(a, ImVec2(b.x - actionW - px(20.0f), bar1.y), true);
+            ImGui::TextUnformatted(text);
+            ImGui::PopClipRect();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", text);
+
+            ImGui::SetCursorScreenPos(ImVec2(b.x - actionW - px(10.0f),
+                                             a.y + (barH - ImGui::GetFrameHeight() * 0.86f) * 0.5f));
+            if (chipButton(action, true))
+                resumeRequested = true;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Open the plugin's own editor again. If it stops responding once more,\n"
+                                  "RadioVoice offers to restart without it.");
+            top = bar1.y + px(10.0f);
+        }
+        ImGui::SetCursorScreenPos(ImVec2(a.x, top));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-        ImGui::BeginChild("##pluginParams", ImVec2(b.x - a.x, b.y - a.y), ImGuiChildFlags_None);
+        ImGui::BeginChild("##pluginParams", ImVec2(b.x - a.x, b.y - top), ImGuiChildFlags_None);
         renderPluginParameters();
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -2595,6 +2664,8 @@ void App::renderPluginView(host::Vst3Plugin* plugin, ImVec2 origin, ImVec2 size)
 
     footerText(fonts_, frame.footerText, plugin->descriptor().path.c_str());
 
+    if (resumeRequested)
+        resumeEditor(*plugin);
     if (removeRequested && index != SIZE_MAX)
         removeNode(index);
 }
